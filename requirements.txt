@@ -1,0 +1,20 @@
+# Kanzlei Pipeline v2 - Abhängigkeiten
+# ==================================
+# Installation: pip install -r requirements.txt
+
+# Text-Extraktion
+docling>=2.0.0          # PDF/DOCX → Markdown (IBM, sehr gut bei Tabellen)
+PyMuPDF>=1.24.0         # Fallback PDF-Extraktion
+python-docx>=1.1.0      # Fallback DOCX-Extraktion
+extract-msg>=0.48.0     # Outlook MSG-Dateien
+striprtf>=0.0.26        # RTF-Dateien
+
+# LLM-Anbindung
+requests>=2.31.0        # HTTP-Calls an Ollama API
+
+# OCR für Bild-PDFs (Tesseract separat installieren: brew install tesseract tesseract-lang)
+# PyMuPDF (oben) rendert die Seiten als Bilder, Tesseract macht das OCR
+
+# Optional: Redaction (für späteren Einbau)
+# presidio-analyzer>=2.2.0
+# presidio-anonymizer>=2.2.0
