@@ -7,7 +7,7 @@
 
 **Your on-premise AI briefing pipeline for legal professionals.**
 
-Drop your case files — contracts, court decisions, emails, scanned PDFs, whatever you've got — and Newcase LM reads them, extracts the facts, connects the dots across documents, and delivers two things: a **confidential case briefing** for your team, and a **fully anonymized prompt** ready to send to any cloud AI (Claude, GPT-4, Gemini) without exposing a single name, address, or case number.
+Drop your case files — contracts, court decisions, emails, scanned PDFs, whatever you've got — and Newcase LM reads them, extracts the facts, connects the dots across documents, and delivers two things: a **confidential case briefing** for your team, and a **fully anonymized prompt** ready to send to any cloud AI (Claude, ChatGPT, Gemini) without exposing a single name, address, or case number.
 
 Everything runs locally on your machine. Nothing leaves your network. Ever.
 
