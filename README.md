@@ -1,20 +1,29 @@
 # Newcase LM
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-000000.svg?logo=ollama)](https://ollama.com)
+[![Gemma 4](https://img.shields.io/badge/Model-Gemma%204%2031B-4285F4.svg?logo=google&logoColor=white)](https://ai.google.dev/gemma)
+
 **Your on-premise AI briefing pipeline for legal professionals.**
 
 Drop your case files — contracts, court decisions, emails, scanned PDFs, whatever you've got — and Newcase LM reads them, extracts the facts, connects the dots across documents, and delivers two things: a **confidential case briefing** for your team, and a **fully anonymized prompt** ready to send to any cloud AI (Claude, GPT-4, Gemini) without exposing a single name, address, or case number.
 
 Everything runs locally on your machine. Nothing leaves your network. Ever.
 
-**Watch the demo:** [Newcase LM on YouTube](https://www.youtube.com/watch?v=ZLX6WC37dHg)
+### 🎬 Demo
+
+[![Watch the demo](https://img.youtube.com/vi/ZLX6WC37dHg/maxresdefault.jpg)](https://www.youtube.com/watch?v=ZLX6WC37dHg)
+
+> *Click the image to watch the full walkthrough on YouTube (3 min)*
 
 **Ships with incremental updates:** Add a new document to an existing case, run the pipeline again — only the new file gets processed, and the briefing is regenerated with the additional context. No redundant work.
 
-## Who is this for?
+## 🎯 Who is this for?
 
 Anyone who works with legal documents and wants AI assistance without compromising confidentiality: law firms, in-house legal teams, courts, government agencies, compliance departments, insurance companies. If you handle sensitive case files and need structured briefings, this is for you.
 
-## How it works
+## ⚙️ How it works
 
 ```
 Your case files (PDF, DOCX, MSG, EML, TXT, RTF, ...)
@@ -35,11 +44,11 @@ Your case files (PDF, DOCX, MSG, EML, TXT, RTF, ...)
 
 The pipeline uses real names and details throughout Stages 2 and 3a — this produces dramatically better cross-document person matching and coherent narratives. Anonymization happens as a separate final step on the already-polished briefing, which means cleaner and more consistent redaction.
 
-## Privacy & confidentiality
+## 🔒 Privacy & confidentiality
 
 Newcase LM is built for environments where confidentiality is non-negotiable — whether that's attorney-client privilege, professional secrecy obligations, or internal compliance policies. All processing (text extraction, LLM inference, anonymization) happens locally via [Ollama](https://ollama.com). No API calls to external services. No telemetry. No cloud. Your case data stays on your hardware.
 
-## Installation
+## 📦 Installation
 
 ### Prerequisites
 
@@ -71,7 +80,7 @@ brew install tesseract tesseract-lang
 # sudo apt install tesseract-ocr tesseract-ocr-deu
 ```
 
-## Usage
+## 🚀 Usage
 
 ```bash
 # Drop your case files into the input folder (default: ~/Desktop/newcase/)
@@ -91,7 +100,7 @@ python3 pipeline.py --skip-anon
 python3 pipeline.py --input-dir ~/Cases/Smith --output-dir ~/Cases/Smith/output
 ```
 
-## Output
+## 📄 Output
 
 The `output/` folder will contain:
 
@@ -103,13 +112,13 @@ The `output/` folder will contain:
 | `ANON_*.md` | Same as Markdown |
 | `*_klartext.md` | Individual document summaries |
 
-## Incremental updates
+## 🔄 Incremental updates
 
 The pipeline caches document summaries based on file hashes. When you add a new document to an existing case and re-run the pipeline, only the new document is summarized — cached results are reused. The overall briefing is then regenerated with the full context, including the new material.
 
 To reset the cache, delete the `.cache/` folder inside your input directory.
 
-## Hardware, model & scaling
+## 🖥️ Hardware, model & scaling
 
 ### Tested configuration
 
@@ -133,7 +142,7 @@ The default context window is 32,768 tokens (`num_ctx` in `config.py`). This com
 
 Ollama handles model loading and GPU offloading automatically. If it runs, it runs.
 
-## Project structure
+## 🗂️ Project structure
 
 ```
 ├── pipeline.py       # Main orchestration script
@@ -145,7 +154,7 @@ Ollama handles model loading and GPU offloading automatically. If it runs, it ru
 └── .gitignore        # Protects output from accidental commits
 ```
 
-## Configuration
+## ⚡ Configuration
 
 All prompts, model settings, and paths are in `config.py`. Key settings:
 
@@ -156,11 +165,11 @@ All prompts, model settings, and paths are in `config.py`. Key settings:
 
 The default prompts are optimized for Austrian legal documents in German. Adjust them for your needs.
 
-## Related: Pre-AI Redaction Tool
+## 🔗 Related: Pre-AI Redaction Tool
 
 If you need fine-grained, interactive control over redaction — for instance, reviewing and adjusting which entities get anonymized before sending a document anywhere — check out [Pre-AI Redaction Workflow](https://github.com/HeinzTempl/pre_ai_redaction_workflow_legal_professional_V3). It's a standalone Streamlit app with NER-based entity detection, drag-and-drop document upload, and a learning system that improves over time. Works well as a complement to Newcase LM for cases where you want a human in the loop on the redaction step.
 
-## License
+## 📝 License
 
 MIT License — see [LICENSE](LICENSE).
 
