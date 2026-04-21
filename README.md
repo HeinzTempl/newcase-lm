@@ -6,6 +6,8 @@ Drop your case files — contracts, court decisions, emails, scanned PDFs, whate
 
 Everything runs locally on your machine. Nothing leaves your network. Ever.
 
+**Watch the demo:** [Newcase LM on YouTube](https://www.youtube.com/watch?v=ZLX6WC37dHg)
+
 **Ships with incremental updates:** Add a new document to an existing case, run the pipeline again — only the new file gets processed, and the briefing is regenerated with the additional context. No redundant work.
 
 ## Who is this for?
