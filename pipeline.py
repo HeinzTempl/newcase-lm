@@ -323,22 +323,44 @@ def run_pipeline(
             logger.info("-" * 40)
 
             # Anonymisiere die Gesamtübersicht
-            anon_summary = anonymize_text(act_summary_klartext)
+            anon_raw = anonymize_text(act_summary_klartext)
+
+            # Zuordnungstabelle extrahieren
+            anon_summary, mapping_table = _split_mapping_table(anon_raw)
+
+            # Dokumentenübersicht (identisch zur Klartext-Version, enthält keine PII)
+            anon_doc_overview = doc_overview
 
             anon_path = output_dir / f"ANON_{timestamp}.md"
             anon_path.write_text(
                 f"# Gesamtübersicht Akt (ANONYMISIERT)\n\n"
                 f"*Erstellt: {timestamp_display}*\n"
                 f"*Anonymisiert für Cloud-LLM-Nutzung*\n\n"
-                f"---\n\n{anon_summary}",
+                f"---\n\n{anon_doc_overview}\n\n---\n\n{anon_summary}",
                 encoding="utf-8",
             )
             logger.info(f"  → {anon_path.name}")
+
+            # Zuordnungstabelle an Klartext-Dokument anhängen
+            if mapping_table:
+                logger.info(f"  → Zuordnungstabelle erkannt, wird an Klartext angehängt")
+                # MD-Datei ergänzen
+                with open(klartext_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n\n---\n\n## Zuordnung Klartext → Anonymisiert\n\n{mapping_table}")
+                # DOCX neu exportieren mit Zuordnungstabelle
+                export_klartext_docx(
+                    act_summary=act_summary_klartext,
+                    doc_overview=doc_overview,
+                    output_path=klartext_docx_path,
+                    timestamp=timestamp_display,
+                    mapping_table=mapping_table,
+                )
 
             # DOCX-Export Anonymisiert
             anon_docx_path = output_dir / f"ANON_{timestamp}.docx"
             export_anon_docx(
                 anon_summary=anon_summary,
+                doc_overview=anon_doc_overview,
                 output_path=anon_docx_path,
                 timestamp=timestamp_display,
             )
@@ -436,6 +458,21 @@ def _build_doc_overview(extracted_docs: list[dict], summaries: list[dict]) -> st
             doc_overview_lines.append(f"| {i} | {doc_label} | {date_str} |")
 
     return "\n".join(doc_overview_lines)
+
+
+def _split_mapping_table(anon_raw: str) -> tuple[str, str | None]:
+    """Trennt die Zuordnungstabelle vom anonymisierten Text.
+
+    Returns:
+        (anon_text, mapping_table) – mapping_table ist None wenn nicht gefunden.
+    """
+    marker = "---ZUORDNUNG---"
+    if marker in anon_raw:
+        parts = anon_raw.split(marker, 1)
+        anon_text = parts[0].strip()
+        mapping_table = parts[1].strip()
+        return anon_text, mapping_table
+    return anon_raw.strip(), None
 
 
 def _extract_doc_type_from_summary(summary_text: str) -> str | None:

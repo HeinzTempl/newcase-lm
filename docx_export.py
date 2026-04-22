@@ -194,6 +194,7 @@ def export_klartext_docx(
     doc_overview: str,
     output_path: Path,
     timestamp: str = None,
+    mapping_table: str = None,
 ):
     """
     Exportiert die Klartext-Gesamtübersicht als DOCX.
@@ -202,6 +203,7 @@ def export_klartext_docx(
         act_summary: Der LLM-generierte Sachverhalt (Markdown)
         doc_overview: Die Dokumentenübersicht-Tabelle (Markdown)
         output_path: Zielpfad für die DOCX-Datei
+        mapping_table: Optionale Zuordnungstabelle (Klartext → Anonymisiert)
     """
     if not timestamp:
         timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -225,6 +227,12 @@ def export_klartext_docx(
     # Sachverhalt
     _parse_markdown_to_docx(doc, act_summary)
 
+    # Zuordnungstabelle (Klartext → Anonymisiert)
+    if mapping_table:
+        doc.add_paragraph("─" * 60)
+        doc.add_heading("Zuordnung Klartext → Anonymisiert", level=2)
+        _add_doc_overview_table(doc, mapping_table)
+
     # Speichern
     doc.save(str(output_path))
     logger.info(f"  → DOCX: {output_path.name}")
@@ -234,6 +242,7 @@ def export_anon_docx(
     anon_summary: str,
     output_path: Path,
     timestamp: str = None,
+    doc_overview: str = None,
 ):
     """
     Exportiert die anonymisierte Gesamtübersicht als DOCX.
@@ -241,6 +250,7 @@ def export_anon_docx(
     Args:
         anon_summary: Der anonymisierte Sachverhalt (Markdown)
         output_path: Zielpfad für die DOCX-Datei
+        doc_overview: Optionale anonymisierte Dokumentenübersicht (Markdown)
     """
     if not timestamp:
         timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -254,6 +264,11 @@ def export_anon_docx(
         subtitle=f"Erstellt: {timestamp} · Anonymisiert für Cloud-LLM-Nutzung",
         confidential=False,
     )
+
+    # Anonymisierte Dokumentenübersicht
+    if doc_overview:
+        _add_doc_overview_table(doc, doc_overview)
+        doc.add_paragraph("─" * 60)
 
     # Sachverhalt
     _parse_markdown_to_docx(doc, anon_summary)
