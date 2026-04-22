@@ -167,6 +167,18 @@ VERBOTEN:
 
 Gib den anonymisierten Text VOLLSTÄNDIG aus, Wort für Wort identisch
 bis auf die anonymisierten Stellen.
+
+ZUORDNUNGSTABELLE:
+Füge am ENDE des anonymisierten Textes eine Zuordnungstabelle an,
+abgetrennt durch die Markierung "---ZUORDNUNG---".
+Liste JEDE vorgenommene Ersetzung auf:
+
+---ZUORDNUNG---
+| Originalbezeichnung | Anonymisierte Bezeichnung |
+|---------------------|--------------------------|
+| Max Mustermann | Geschäftsführer 1 |
+| Muster GmbH | [Firma A] |
+| Musterstraße 5, 1010 Wien | [Adresse im 1. Bezirk] |
 """
 
 ANON_USER_PROMPT_TEMPLATE = """Anonymisiere den folgenden Sachverhalt.
