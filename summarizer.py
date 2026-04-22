@@ -10,6 +10,7 @@ Klartext-First Ansatz:
 import json
 import logging
 import re
+import time
 import requests
 from pathlib import Path
 
@@ -82,6 +83,7 @@ def summarize_document(extracted: dict) -> dict:
     summary = _call_ollama(
         system_prompt=SUMMARY_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        label=f"Zusammenfassung: {extracted['source_file']}",
     )
 
     if summary.startswith("[FEHLER"):
@@ -221,6 +223,7 @@ Dokumente mit ⚠ sind nicht vollständig verifiziert - kennzeichne diese Info.
     response = _call_ollama(
         system_prompt=ACT_SUMMARY_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        label=f"Gesamtbriefing ({len(document_summaries)} Dokumente)",
     )
 
     return response
@@ -236,13 +239,18 @@ def anonymize_text(klartext: str) -> str:
     response = _call_ollama(
         system_prompt=ANON_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        label="Anonymisierung",
     )
 
     return response
 
 
-def _call_ollama(system_prompt: str, user_prompt: str) -> str:
-    """Ruft Ollama API auf und gibt die Antwort zurück."""
+def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
+    """Ruft Ollama API auf und gibt die Antwort zurück.
+
+    Args:
+        label: Optionales Label für die Token-Statistik im Log (z.B. "Dok 3/11")
+    """
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [
@@ -259,13 +267,33 @@ def _call_ollama(system_prompt: str, user_prompt: str) -> str:
     }
 
     try:
+        t_start = time.time()
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json=payload,
             timeout=600,  # 10 Min Timeout – Thinking Mode braucht länger
         )
         resp.raise_for_status()
-        content = resp.json()["message"]["content"]
+        data = resp.json()
+        t_elapsed = time.time() - t_start
+
+        content = data["message"]["content"]
+
+        # === Token-Statistik loggen ===
+        prompt_tokens = data.get("prompt_eval_count", 0)
+        output_tokens = data.get("eval_count", 0)
+        total_tokens = prompt_tokens + output_tokens
+        ctx_pct = (total_tokens / 32768) * 100 if total_tokens > 0 else 0
+        tok_per_sec = output_tokens / t_elapsed if t_elapsed > 0 else 0
+
+        warn = "  ⚠️ NEAR LIMIT" if ctx_pct > 90 else ""
+        prefix = f"[{label}] " if label else ""
+
+        logger.info(
+            f"  {prefix}📊 {prompt_tokens:,} prompt + {output_tokens:,} output "
+            f"= {total_tokens:,} tokens ({ctx_pct:.1f}% von 32k) "
+            f"| {tok_per_sec:.1f} tok/s | {t_elapsed:.0f}s{warn}"
+        )
 
         # Gemma4 Thinking Mode: Entferne den internen Denkprozess aus dem Output
         if "<|channel>" in content:
