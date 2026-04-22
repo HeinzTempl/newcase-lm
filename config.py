@@ -146,6 +146,9 @@ ANONYMISIERUNGSREGELN (STRIKT):
 - Bezirksnamen → "[Bezirk]" (NICHT "Döbling", "Favoriten" etc.)
 - Telefonnummern/E-Mails → weglassen
 - Aktenzeichen/Geschäftszahlen → "[GZ]"
+- Rechnungsnummern → "[Rechnungs-Nr.]"
+- Polizzen-/Versicherungsnummern → "[Polizzen-Nr.]"
+- Firmenbuchnummern → "[FN]"
 - Geburtsdaten → "[geb. JJJJ]" (nur Jahreszahl behalten)
 - IBAN/Kontonummern → weglassen
 - Grundstücksnummern/EZ → "[EZ]", "[GST-NR]"
