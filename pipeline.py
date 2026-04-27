@@ -375,9 +375,13 @@ def run_pipeline(
             logger.info("STUFE 3b: Anonymisierung für Cloud-Prompt")
             logger.info("-" * 40)
 
-            anon_summary = anonymize_text(summaries[0]["summary"])
+            anon_raw = anonymize_text(summaries[0]["summary"])
+
+            # Zuordnungstabelle extrahieren
+            anon_summary, mapping_table = _split_mapping_table(anon_raw)
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            timestamp_display_single = datetime.now().strftime("%d.%m.%Y %H:%M")
             source_stem = Path(summaries[0]["source_file"]).stem
             anon_path = output_dir / f"{source_stem}_anon.md"
             anon_path.write_text(
@@ -388,12 +392,20 @@ def run_pipeline(
             )
             logger.info(f"  → {anon_path.name}")
 
+            # Zuordnungstabelle an Klartext-Einzelzusammenfassung anhängen
+            if mapping_table:
+                logger.info(f"  → Zuordnungstabelle erkannt, wird an Klartext angehängt")
+                klartext_path = output_dir / f"{source_stem}_klartext.md"
+                if klartext_path.exists():
+                    with open(klartext_path, "a", encoding="utf-8") as f:
+                        f.write(f"\n\n---\n\n## Zuordnung Klartext → Anonymisiert\n\n{mapping_table}")
+
             # DOCX-Export
             anon_docx_path = output_dir / f"{source_stem}_anon.docx"
             export_anon_docx(
                 anon_summary=anon_summary,
                 output_path=anon_docx_path,
-                timestamp=datetime.now().strftime("%d.%m.%Y %H:%M"),
+                timestamp=timestamp_display_single,
             )
 
     # ========================================
