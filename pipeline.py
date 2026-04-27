@@ -29,6 +29,7 @@ from datetime import datetime
 from config import (
     INPUT_DIR, OUTPUT_DIR, EXTRACTED_DIR, CACHE_DIR,
     SUPPORTED_EXTENSIONS, ENABLE_REDACTION_CHECK,
+    ENABLE_VERIFICATION,
 )
 from extractor import extract_file, save_extracted_text
 from summarizer import (
@@ -260,11 +261,15 @@ def run_pipeline(
 
         # Klartext-Einzelzusammenfassung speichern
         source_stem = Path(source_file).stem
-        verified_tag = "✓ VERIFIZIERT" if result["verified"] else "⚠ NICHT VOLLSTÄNDIG VERIFIZIERT"
+        if ENABLE_VERIFICATION:
+            verified_tag = "✓ VERIFIZIERT" if result["verified"] else "⚠ NICHT VOLLSTÄNDIG VERIFIZIERT"
+            status_line = f"**Status:** {verified_tag}\n"
+        else:
+            status_line = ""
         summary_path = output_dir / f"{source_stem}_klartext.md"
         summary_path.write_text(
             f"# Zusammenfassung (Klartext): {source_file}\n"
-            f"**Status:** {verified_tag}\n"
+            f"{status_line}"
             f"**VERTRAULICH - NUR FÜR KANZLEIINTERNEN GEBRAUCH**\n\n"
             f"{result['summary']}",
             encoding="utf-8",
@@ -368,7 +373,28 @@ def run_pipeline(
             logger.info("\n--skip-anon: Anonymisierung übersprungen")
 
     elif len(summaries) == 1:
-        # Nur ein Dokument → kein Gesamt nötig, aber Anonymisierung anbieten
+        # Einzeldokument: Klartext-DOCX + Dokumentenübersicht + Anonymisierung
+        logger.info("")
+        logger.info("-" * 40)
+        logger.info("STUFE 3: Einzeldokument-Output")
+        logger.info("-" * 40)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        timestamp_display_single = datetime.now().strftime("%d.%m.%Y %H:%M")
+        source_stem = Path(summaries[0]["source_file"]).stem
+
+        # Dokumentenübersicht auch für Einzeldokument
+        doc_overview = _build_doc_overview(extracted_docs, summaries)
+
+        # Klartext-DOCX exportieren
+        klartext_docx_path = output_dir / f"{source_stem}_klartext.docx"
+        export_klartext_docx(
+            act_summary=summaries[0]["summary"],
+            doc_overview=doc_overview,
+            output_path=klartext_docx_path,
+            timestamp=timestamp_display_single,
+        )
+
         if not skip_anon:
             logger.info("")
             logger.info("-" * 40)
@@ -380,9 +406,6 @@ def run_pipeline(
             # Zuordnungstabelle extrahieren
             anon_summary, mapping_table = _split_mapping_table(anon_raw)
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-            timestamp_display_single = datetime.now().strftime("%d.%m.%Y %H:%M")
-            source_stem = Path(summaries[0]["source_file"]).stem
             anon_path = output_dir / f"{source_stem}_anon.md"
             anon_path.write_text(
                 f"# Zusammenfassung (ANONYMISIERT): {source_stem}\n\n"
@@ -392,18 +415,27 @@ def run_pipeline(
             )
             logger.info(f"  → {anon_path.name}")
 
-            # Zuordnungstabelle an Klartext-Einzelzusammenfassung anhängen
+            # Zuordnungstabelle an Klartext anhängen (MD + DOCX)
             if mapping_table:
                 logger.info(f"  → Zuordnungstabelle erkannt, wird an Klartext angehängt")
-                klartext_path = output_dir / f"{source_stem}_klartext.md"
-                if klartext_path.exists():
-                    with open(klartext_path, "a", encoding="utf-8") as f:
+                klartext_md_path = output_dir / f"{source_stem}_klartext.md"
+                if klartext_md_path.exists():
+                    with open(klartext_md_path, "a", encoding="utf-8") as f:
                         f.write(f"\n\n---\n\n## Zuordnung Klartext → Anonymisiert\n\n{mapping_table}")
+                # DOCX neu exportieren mit Zuordnungstabelle
+                export_klartext_docx(
+                    act_summary=summaries[0]["summary"],
+                    doc_overview=doc_overview,
+                    output_path=klartext_docx_path,
+                    timestamp=timestamp_display_single,
+                    mapping_table=mapping_table,
+                )
 
-            # DOCX-Export
+            # DOCX-Export Anonymisiert
             anon_docx_path = output_dir / f"{source_stem}_anon.docx"
             export_anon_docx(
                 anon_summary=anon_summary,
+                doc_overview=doc_overview,
                 output_path=anon_docx_path,
                 timestamp=timestamp_display_single,
             )
