@@ -130,7 +130,24 @@ The default model is [Gemma 4 31B](https://ai.google.dev/gemma) by Google, runni
 
 ### Context window
 
-The default context window is 32,768 tokens (`num_ctx` in `config.py`). This comfortably handles individual documents up to ~60,000 characters and combined briefings from up to ~10–15 documents. For larger cases, increase `num_ctx` to 49,152 or 65,536 — this costs more RAM for the KV cache but Ollama handles it automatically.
+The default context window is 32,768 tokens (`NUM_CTX` in `config.py`). This comfortably handles individual documents up to ~60,000 characters and combined briefings from up to ~10–15 documents. For larger cases, raise it via environment variables — no code change required:
+
+```bash
+# Choose a different model than the default gemma4:31b-it-q8_0
+export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16
+
+# Larger context (more KV-cache RAM, but Ollama handles it automatically)
+export NEWCASE_NUM_CTX=131072            # 128k tokens (Qwen3 with YaRN, etc.)
+export NEWCASE_MAX_TEXT_LENGTH=200000    # ~50k tokens per single document
+```
+
+Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible defaults by hardware:
+
+| RAM | `NEWCASE_NUM_CTX` | `NEWCASE_MAX_TEXT_LENGTH` |
+|---|---|---|
+| 64 GB | 32768 (default) | 60000 (default) |
+| 128 GB | 65536 | 120000 |
+| 256 GB+ | 131072 | 200000 |
 
 ### Hardware requirements
 

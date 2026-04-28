@@ -27,6 +27,7 @@ from config import (
     MAX_TEXT_LENGTH,
     MAX_VERIFICATION_RETRIES,
     ENABLE_VERIFICATION,
+    NUM_CTX,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,7 +263,7 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
             "temperature": 1.0,  # Google-Empfehlung für Gemma4 (Thinking Mode)
             "top_p": 0.95,
             "top_k": 64,
-            "num_ctx": 32768,
+            "num_ctx": NUM_CTX,
         },
     }
 
@@ -283,15 +284,16 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
         prompt_tokens = data.get("prompt_eval_count", 0)
         output_tokens = data.get("eval_count", 0)
         total_tokens = prompt_tokens + output_tokens
-        ctx_pct = (total_tokens / 32768) * 100 if total_tokens > 0 else 0
+        ctx_pct = (total_tokens / NUM_CTX) * 100 if total_tokens > 0 else 0
         tok_per_sec = output_tokens / t_elapsed if t_elapsed > 0 else 0
 
         warn = "  ⚠️ NEAR LIMIT" if ctx_pct > 90 else ""
         prefix = f"[{label}] " if label else ""
+        ctx_label = f"{NUM_CTX // 1024}k" if NUM_CTX % 1024 == 0 else f"{NUM_CTX}"
 
         logger.info(
             f"  {prefix}📊 {prompt_tokens:,} prompt + {output_tokens:,} output "
-            f"= {total_tokens:,} tokens ({ctx_pct:.1f}% von 32k) "
+            f"= {total_tokens:,} tokens ({ctx_pct:.1f}% von {ctx_label}) "
             f"| {tok_per_sec:.1f} tok/s | {t_elapsed:.0f}s{warn}"
         )
 
