@@ -7,6 +7,7 @@ Klartext-First Ansatz:
   Stufe 3b: Anonymisierung der Gesamtübersicht (Cloud-Prompt)
 """
 
+import os
 from pathlib import Path
 
 # === Ordner-Konfiguration ===
@@ -21,8 +22,17 @@ SUPPORTED_EXTENSIONS = {
 }
 
 # === Ollama-Konfiguration ===
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "gemma4:31b-it-q8_0"  # Gemma 4 31B in Q8 (~30GB, bessere Qualität)
+# Modell ist via Env-Variable überschreibbar – so kann jede Maschine ihr eigenes
+# Modell fahren ohne Code-Änderung:
+#   export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16   # auf großem Mac Studio
+OLLAMA_BASE_URL = os.environ.get("NEWCASE_OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("NEWCASE_OLLAMA_MODEL", "gemma4:31b-it-q8_0")
+
+# === Kontextfenster ===
+# Default 32k passt für 64GB-Maschinen mit Gemma4-31B Q8.
+# Auf größeren Maschinen via Env-Variable hochsetzen, z.B.:
+#   export NEWCASE_NUM_CTX=131072   # 128k (Qwen3 mit YaRN)
+NUM_CTX = int(os.environ.get("NEWCASE_NUM_CTX", 32768))
 
 # === Verifikation ===
 ENABLE_VERIFICATION = False  # Verifikationsschleife an/aus
@@ -224,5 +234,8 @@ die im Originaltext belegt sind.
 Prüfergebnis:"""
 
 # === Pipeline-Optionen ===
-MAX_TEXT_LENGTH = 60000
+# Pro-Dokument-Cap (in Zeichen) vor LLM-Aufruf. ~60k Zeichen ≈ 15-20k Tokens.
+# Auf größeren Maschinen via Env-Variable hochsetzen, z.B.:
+#   export NEWCASE_MAX_TEXT_LENGTH=200000
+MAX_TEXT_LENGTH = int(os.environ.get("NEWCASE_MAX_TEXT_LENGTH", 60000))
 ENABLE_REDACTION_CHECK = False
