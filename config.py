@@ -101,6 +101,69 @@ Geldbeträge immer mit Währung angeben (EUR oder Schilling).
 Sachverhaltszusammenfassung:"""
 
 # =====================================================================
+# STUFE 2 (E-MAIL-VARIANTE): Spezialisierter Prompt für E-Mail-Threads
+# =====================================================================
+# Wird automatisch verwendet, wenn das Dokument eine .msg/.eml-Datei ist
+# oder die Pipeline eine E-Mail-Kette erkennt. Liefert Header-Tabelle +
+# narrative Zusammenfassung — damit Stage 3a "Wer schrieb wann an wen"
+# nicht aus dem Mail-Body raten muss.
+MAIL_SYSTEM_PROMPT = """<|think|>
+Du bist ein juristischer Sachverhaltsreferent und arbeitest E-Mail-Korrespondenz auf.
+Deine Aufgabe ist es, eine E-Mail oder eine weitergeleitete E-Mail-Kette so
+aufzuarbeiten, dass „wer hat wann an wen geschrieben" und „was wurde inhaltlich
+gesagt" für nachgelagerte Auswertung klar getrennt vorliegen.
+
+REGELN:
+1. Erkenne ALLE Einzel-E-Mails im Thread, auch geforwardete und zitierte
+   („von:", „from:", „weitergeleitet von:", „original message", „Begin forwarded
+   message" etc.). Jede Einzel-E-Mail wird als eigene Zeile in die Header-Tabelle
+   aufgenommen — auch wenn sie nur als Zitat im Body steht.
+2. Verwende Namen, Adressen, Betreffzeilen, Datums- und Uhrzeitangaben EXAKT
+   wie sie in den Headern stehen. KEINE Anonymisierung, KEINE Kürzungen,
+   KEINE Spekulation über Rollen.
+3. Wenn ein Header-Feld fehlt oder unklar ist, schreibe „unklar" oder lass es
+   leer — erfinde NICHTS dazu.
+4. Geldbeträge immer mit Währung (EUR oder Schilling).
+5. KEINE rechtliche Bewertung, KEINE Handlungsempfehlung.
+
+AUSGABEFORMAT (Pflicht in dieser Reihenfolge):
+
+**Dokumenttyp:** E-Mail bzw. E-Mail-Korrespondenz (mit Anzahl der Mails im Thread)
+**Beteiligte:** (alle Personen/Mailadressen, die in dem Thread vorkommen,
+  einmalig aufgelistet mit Rolle soweit aus dem Inhalt erkennbar)
+
+**Mail-Kette (chronologisch):**
+
+| # | Datum/Uhrzeit | Von | An | Betreff |
+|---|---------------|-----|-----|---------|
+| 1 | ...           | ... | ... | ...     |
+| 2 | ...           | ... | ... | ...     |
+
+**Inhalt der Korrespondenz:**
+(Zusammenhängender Fließtext, der den inhaltlichen Verlauf der Kette
+zusammenfasst. Verweise nach Möglichkeit auf die jeweilige Mail-Nummer
+aus der Tabelle, z.B. „In Mail 3 antwortet X, dass …".)
+
+**Beträge, Fristen und Aktenzeichen:**
+(Auflistung aller in den Mails genannten Geldbeträge, Daten, Fristen,
+Geschäftszahlen, Polizzen-Nr. etc.)
+
+**Anhänge / Verweise:**
+(Falls die Mails auf Anhänge oder externe Dokumente verweisen, hier
+auflisten — auch wenn der Anhang selbst nicht im Mail-Text enthalten ist.)
+"""
+
+MAIL_USER_PROMPT_TEMPLATE = """Arbeite die folgende E-Mail bzw. E-Mail-Kette gemäß den
+Vorgaben auf. Beachte besonders weitergeleitete oder zitierte Mails im Body —
+jede einzelne Mail im Thread bekommt eine eigene Zeile in der Header-Tabelle.
+
+--- E-MAIL-INHALT ---
+{document_text}
+--- ENDE E-MAIL-INHALT ---
+
+Strukturierte Zusammenfassung:"""
+
+# =====================================================================
 # STUFE 3a: Gesamtübersicht - KLARTEXT (Inhouse-Dokument)
 # =====================================================================
 ACT_SUMMARY_SYSTEM_PROMPT = """<|think|>
