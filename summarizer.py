@@ -19,6 +19,8 @@ from config import (
     OLLAMA_MODEL,
     SUMMARY_SYSTEM_PROMPT,
     SUMMARY_USER_PROMPT_TEMPLATE,
+    MAIL_SYSTEM_PROMPT,
+    MAIL_USER_PROMPT_TEMPLATE,
     ACT_SUMMARY_SYSTEM_PROMPT,
     ANON_SYSTEM_PROMPT,
     ANON_USER_PROMPT_TEMPLATE,
@@ -29,6 +31,10 @@ from config import (
     ENABLE_VERIFICATION,
     NUM_CTX,
 )
+
+
+# Dateiendungen, bei denen wir den E-Mail-Spezialprompt verwenden
+MAIL_EXTENSIONS = {".msg", ".eml"}
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +72,17 @@ def summarize_document(extracted: dict) -> dict:
     """
     Fasst ein einzelnes Dokument im KLARTEXT zusammen (keine Anonymisierung).
 
+    Bei E-Mail-Dokumenten (.msg/.eml) wird automatisch ein spezialisierter
+    Prompt verwendet, der eine Header-Tabelle (Datum/Von/An/Betreff) plus
+    narrative Zusammenfassung liefert — damit die Gesamtübersicht (Stage 3a)
+    nachher klar weiß, wer wann an wen geschrieben hat.
+
     Returns:
         dict mit "summary", "verified", "issues"
     """
     text = extracted["extracted_text"]
+    file_type = extracted.get("file_type", "").lower()
+    is_mail = file_type in MAIL_EXTENSIONS
 
     # Text kürzen wenn zu lang
     if len(text) > MAX_TEXT_LENGTH:
@@ -79,12 +92,21 @@ def summarize_document(extracted: dict) -> dict:
         )
         text = text[:MAX_TEXT_LENGTH] + "\n\n[... Text gekürzt ...]"
 
+    # === Prompt-Auswahl: E-Mail oder Standard ===
+    if is_mail:
+        system_prompt = MAIL_SYSTEM_PROMPT
+        user_prompt = MAIL_USER_PROMPT_TEMPLATE.format(document_text=text)
+        label_prefix = "E-Mail"
+    else:
+        system_prompt = SUMMARY_SYSTEM_PROMPT
+        user_prompt = SUMMARY_USER_PROMPT_TEMPLATE.format(document_text=text)
+        label_prefix = "Zusammenfassung"
+
     # === Zusammenfassung im Klartext ===
-    user_prompt = SUMMARY_USER_PROMPT_TEMPLATE.format(document_text=text)
     summary = _call_ollama(
-        system_prompt=SUMMARY_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=user_prompt,
-        label=f"Zusammenfassung: {extracted['source_file']}",
+        label=f"{label_prefix}: {extracted['source_file']}",
     )
 
     if summary.startswith("[FEHLER"):
