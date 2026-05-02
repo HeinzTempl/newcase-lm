@@ -17,6 +17,7 @@ from pathlib import Path
 from config import (
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
+    OLLAMA_TIMEOUT,
     SUMMARY_SYSTEM_PROMPT,
     SUMMARY_USER_PROMPT_TEMPLATE,
     MAIL_SYSTEM_PROMPT,
@@ -294,7 +295,7 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json=payload,
-            timeout=600,  # 10 Min Timeout – Thinking Mode braucht länger
+            timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()

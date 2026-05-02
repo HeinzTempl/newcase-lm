@@ -34,6 +34,13 @@ OLLAMA_MODEL = os.environ.get("NEWCASE_OLLAMA_MODEL", "gemma4:31b-it-q8_0")
 #   export NEWCASE_NUM_CTX=131072   # 128k (Qwen3 mit YaRN)
 NUM_CTX = int(os.environ.get("NEWCASE_NUM_CTX", 32768))
 
+# === Ollama-Timeout (in Sekunden) ===
+# Default 30 Min. Bei großen, langsamen Modellen (z.B. 122B-A10B mit ~20 tok/s)
+# kann eine Anonymisierung mit ~20k Output-Tokens gut 18 Min dauern. Bei
+# kleinen schnellen Modellen reichen 10 Min. Auf Bedarf via Env-Variable:
+#   export NEWCASE_OLLAMA_TIMEOUT=3600   # 60 Min für sehr lange Outputs
+OLLAMA_TIMEOUT = int(os.environ.get("NEWCASE_OLLAMA_TIMEOUT", 1800))
+
 # === Verifikation ===
 ENABLE_VERIFICATION = False  # Verifikationsschleife an/aus
 MAX_VERIFICATION_RETRIES = 2

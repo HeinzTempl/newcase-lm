@@ -139,6 +139,11 @@ export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16
 # Larger context (more KV-cache RAM, but Ollama handles it automatically)
 export NEWCASE_NUM_CTX=131072            # 128k tokens (Qwen3 with YaRN, etc.)
 export NEWCASE_MAX_TEXT_LENGTH=200000    # ~50k tokens per single document
+
+# Longer Ollama timeout for big, slow models (default: 1800 = 30 min).
+# A 122B model at ~20 tok/s producing a ~20k-token anonymisation needs
+# roughly 18 min — set higher if you see "Ollama Timeout" errors:
+export NEWCASE_OLLAMA_TIMEOUT=3600       # 60 min
 ```
 
 Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible defaults by hardware:
