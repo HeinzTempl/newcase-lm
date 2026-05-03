@@ -22,6 +22,10 @@ from config import (
     SUMMARY_USER_PROMPT_TEMPLATE,
     MAIL_SYSTEM_PROMPT,
     MAIL_USER_PROMPT_TEMPLATE,
+    EXTRACT_SYSTEM_PROMPT,
+    EXTRACT_USER_PROMPT_TEMPLATE,
+    WRITE_SYSTEM_PROMPT,
+    WRITE_USER_PROMPT_TEMPLATE,
     ACT_SUMMARY_SYSTEM_PROMPT,
     ANON_SYSTEM_PROMPT,
     ANON_USER_PROMPT_TEMPLATE,
@@ -30,6 +34,7 @@ from config import (
     MAX_TEXT_LENGTH,
     MAX_VERIFICATION_RETRIES,
     ENABLE_VERIFICATION,
+    ENABLE_TWO_STAGE,
     NUM_CTX,
 )
 
@@ -104,11 +109,32 @@ def summarize_document(extracted: dict) -> dict:
         label_prefix = "Zusammenfassung"
 
     # === Zusammenfassung im Klartext ===
-    summary = _call_ollama(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        label=f"{label_prefix}: {extracted['source_file']}",
-    )
+    if ENABLE_TWO_STAGE and not is_mail:
+        # Two-Stage-Prompting: Pass 1 = Fakten extrahieren, Pass 2 = Sachverhalt formulieren.
+        # Bei E-Mails behalten wir den dedizierten Mail-Prompt (Header-Tabelle + Inhalt),
+        # weil der bereits eine andere Strukturierung vornimmt.
+        logger.info(f"  [Two-Stage] Pass 1/2 — Faktenextraktion ...")
+        facts = _call_ollama(
+            system_prompt=EXTRACT_SYSTEM_PROMPT,
+            user_prompt=EXTRACT_USER_PROMPT_TEMPLATE.format(document_text=text),
+            label=f"Extract: {extracted['source_file']}",
+        )
+
+        if facts.startswith("[FEHLER"):
+            return {"summary": facts, "verified": False, "issues": ["LLM-Fehler bei Faktenextraktion"]}
+
+        logger.info(f"  [Two-Stage] Pass 2/2 — Sachverhalt formulieren ...")
+        summary = _call_ollama(
+            system_prompt=WRITE_SYSTEM_PROMPT,
+            user_prompt=WRITE_USER_PROMPT_TEMPLATE.format(facts=facts),
+            label=f"Write: {extracted['source_file']}",
+        )
+    else:
+        summary = _call_ollama(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            label=f"{label_prefix}: {extracted['source_file']}",
+        )
 
     if summary.startswith("[FEHLER"):
         return {"summary": summary, "verified": False, "issues": ["LLM-Fehler"]}
