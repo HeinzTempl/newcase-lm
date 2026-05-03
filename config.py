@@ -45,6 +45,17 @@ OLLAMA_TIMEOUT = int(os.environ.get("NEWCASE_OLLAMA_TIMEOUT", 1800))
 ENABLE_VERIFICATION = False  # Verifikationsschleife an/aus
 MAX_VERIFICATION_RETRIES = 2
 
+# === Two-Stage-Prompting (opt-in, Default aus) ===
+# Wenn aktiv, läuft Stage 2 als zwei aufeinanderfolgende LLM-Calls:
+#   Pass 1: extrahiert harte Fakten strukturiert (Personen, Daten, Beträge,
+#           Aktenzeichen) — ohne Erzählung, ohne Inferenz
+#   Pass 2: formuliert daraus den Sachverhalt — nutzt nur die extrahierten
+#           Fakten, keine Hinzufügung
+# Hilft gegen Halluzinationen, kostet aber doppelte Stage-2-Zeit.
+# Aktivierung via Env-Variable:
+#   export NEWCASE_TWO_STAGE=true
+ENABLE_TWO_STAGE = os.environ.get("NEWCASE_TWO_STAGE", "false").lower() in ("true", "1", "yes", "on")
+
 # =====================================================================
 # STUFE 2: Einzelzusammenfassung - KLARTEXT (keine Anonymisierung!)
 # =====================================================================
@@ -273,6 +284,104 @@ durch Platzhalter. Der restliche Text bleibt Wort für Wort IDENTISCH.
 --- ENDE SACHVERHALT ---
 
 Anonymisierter Sachverhalt:"""
+
+# =====================================================================
+# STUFE 2 (TWO-STAGE-PROMPTING): Pass 1 = Extract, Pass 2 = Write
+# =====================================================================
+# Wird nur verwendet, wenn ENABLE_TWO_STAGE = True (env: NEWCASE_TWO_STAGE).
+# Idee: Halluzinationen reduzieren, indem das Modell zuerst NUR strukturierte
+# Fakten extrahiert (ohne Erzählung), und erst in einem zweiten Pass den
+# Sachverhalt aus diesen Fakten formuliert (ohne Zugriff auf das Original).
+
+EXTRACT_SYSTEM_PROMPT = """<|think|>
+Du bist ein juristischer Sachverhaltsreferent. Deine EINZIGE Aufgabe in
+diesem Schritt ist es, harte Fakten aus dem vorgelegten Dokument
+strukturiert zu extrahieren — KEINE Erzählung, KEINE Bewertung,
+NUR strukturierte Datenpunkte.
+
+REGELN:
+1. Verwende NUR Informationen, die wörtlich oder eindeutig im Dokument
+   stehen. Wenn etwas fehlt: schreibe explizit "—" oder
+   "im Dokument nicht angegeben". KEINE Spekulation, KEINE Inferenz.
+2. Geldbeträge IMMER mit Währung (EUR oder Schilling).
+3. Datums- und Uhrzeitangaben in der Form, in der sie im Dokument stehen.
+4. Bei mehreren Datumsangaben für dasselbe Ereignis: alle nennen mit Quelle.
+5. Eigennamen (Personen, Firmen, Adressen) EXAKT übernehmen wie im Original.
+6. KEINE Anonymisierung — das ist ein Klartext-Schritt.
+
+AUSGABEFORMAT (strikt, in dieser Reihenfolge):
+
+**Dokumenttyp:** ...
+**Dokumentdatum:** ...
+
+**Beteiligte (mit Rolle, soweit aus dem Dokument erkennbar):**
+- Name 1, Rolle 1, ggf. Adresse/Kontakt
+- Name 2, Rolle 2, ggf. Adresse/Kontakt
+
+**Fakten und Ereignisse (chronologisch nach Datum sortiert):**
+- [Datum]: konkrete Tatsache mit Bezug zum Dokument
+- [Datum]: nächste konkrete Tatsache
+
+**Geldbeträge / Fristen / Aktenzeichen:**
+- Betrag/Frist/AZ mit Kontext
+
+**Unklarheiten / fehlende Angaben:**
+- Felder, die im Dokument leer, unleserlich oder widersprüchlich sind
+"""
+
+EXTRACT_USER_PROMPT_TEMPLATE = """Extrahiere aus dem folgenden Dokument
+ALLE harten Fakten gemäß den Vorgaben. KEINE Erzählung, NUR strukturierte
+Datenpunkte. Was nicht im Dokument steht, wird als Lücke markiert.
+
+--- DOKUMENT ---
+{document_text}
+--- ENDE DOKUMENT ---
+
+Strukturierte Faktensammlung:"""
+
+WRITE_SYSTEM_PROMPT = """<|think|>
+Du bist ein juristischer Sachverhaltsreferent. Dir wird eine bereits
+extrahierte, strukturierte Faktensammlung zu einem Dokument vorgelegt.
+Deine Aufgabe: aus diesen Fakten einen zusammenhängenden Sachverhalt
+formulieren.
+
+REGELN (STRIKT):
+1. Verwende AUSSCHLIESSLICH die Fakten aus der Sammlung. KEINE Hinzufügung
+   von Wissen aus anderen Quellen oder eigener Schlussfolgerung.
+2. Wenn die Sammlung eine Lücke markiert ("im Dokument nicht angegeben"
+   oder "—"): übernimm diese Lücke explizit in den Fließtext, statt sie
+   zu füllen.
+3. Geldbeträge mit Währung. Datumsangaben in der Form aus der Sammlung.
+4. Schreibe in zusammenhängender, juristisch sachlicher Sprache.
+5. KEINE rechtliche Bewertung, KEINE Handlungsempfehlung, KEINE Spekulation.
+
+AUSGABEFORMAT:
+
+**Dokumenttyp:** (übernehmen aus Faktensammlung)
+**Dokumentdatum:** (übernehmen aus Faktensammlung)
+**Beteiligte:** (übernehmen aus Faktensammlung, vollständig)
+
+**Sachverhalt:**
+(Zusammenhängender Fließtext, der die Fakten chronologisch und nachvollziehbar
+wiedergibt. Keine Aufzählung, sondern erzählende Form. Lücken aus der
+Faktensammlung als solche kennzeichnen.)
+
+**Beträge und Fristen:**
+(übernehmen aus Faktensammlung)
+"""
+
+WRITE_USER_PROMPT_TEMPLATE = """Hier ist die strukturierte Faktensammlung,
+die im vorigen Schritt aus dem Dokument extrahiert wurde. Formuliere daraus
+einen zusammenhängenden Sachverhalt gemäß den Vorgaben.
+
+WICHTIG: Verwende AUSSCHLIESSLICH die Fakten aus der Sammlung. KEINE
+Hinzufügung von Wissen aus anderen Quellen.
+
+--- FAKTENSAMMLUNG ---
+{facts}
+--- ENDE FAKTENSAMMLUNG ---
+
+Sachverhalt:"""
 
 # === Verifikations-Prompts (optional, über ENABLE_VERIFICATION steuerbar) ===
 VERIFICATION_SYSTEM_PROMPT = """Du bist ein Faktenprüfer. Du bekommst einen Originaltext

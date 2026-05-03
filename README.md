@@ -128,6 +128,12 @@ Successfully tested on a **Mac Studio M4 Max (64GB Unified Memory)** running **G
 
 The default model is [Gemma 4 31B](https://ai.google.dev/gemma) by Google, running in Q8 quantization (~30GB) with Thinking Mode enabled. This delivers high-quality, coherent legal narratives in German. The model and all prompt templates are configured in `config.py` — swap in any Ollama-compatible model that fits your hardware and language.
 
+### Two-stage prompting (optional)
+
+For email-heavy or unstructured cases, you can switch stage 2 from a single LLM call to a two-pass extract-then-write pipeline. Pass 1 produces a structured fact list (people, dates, amounts, references) without narrative. Pass 2 formulates the narrative from those facts only, with no access to the original. This significantly reduces hallucinations and improves entity attribution — for example, identifying a sender's role correctly when only their email signature ("Heinz", "Heinzi") is in the corpus.
+
+Trade-off: doubled stage-2 runtime (in practice 30–40% overhead, since each pass is shorter), and on already well-structured documents (contracts, decrees) it can omit fine details that the single-stage prompt picks up directly from the original text. For that reason, it's an opt-in via `NEWCASE_TWO_STAGE=true` rather than the default. Email documents (.msg/.eml) keep their dedicated mail prompt regardless of this flag.
+
 ### Context window
 
 The default context window is 32,768 tokens (`NUM_CTX` in `config.py`). This comfortably handles individual documents up to ~60,000 characters and combined briefings from up to ~10–15 documents. For larger cases, raise it via environment variables — no code change required:
@@ -144,6 +150,15 @@ export NEWCASE_MAX_TEXT_LENGTH=200000    # ~50k tokens per single document
 # A 122B model at ~20 tok/s producing a ~20k-token anonymisation needs
 # roughly 18 min — set higher if you see "Ollama Timeout" errors:
 export NEWCASE_OLLAMA_TIMEOUT=3600       # 60 min
+
+# Two-stage prompting (default off). When enabled, stage 2 runs as two LLM
+# calls per document: pass 1 extracts structured facts, pass 2 formulates
+# the narrative from those facts only. Significantly reduces hallucinations
+# on email-heavy or unstructured cases (IT, business correspondence, mail
+# threads with unclear roles). On clearly structured documents (contracts,
+# decrees, court files) it can sometimes lose detail vs. single-stage —
+# so keep it as opt-in:
+export NEWCASE_TWO_STAGE=true            # enable for messy email-heavy cases
 ```
 
 Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible defaults by hardware:
