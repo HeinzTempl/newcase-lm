@@ -17,7 +17,9 @@ Everything runs locally on your machine. Nothing leaves your network. Ever.
 
 > *Click the image to watch the full walkthrough on YouTube (3 min)*
 
-**Ships with incremental updates:** Add a new document to an existing case, run the pipeline again — only the new file gets processed, and the briefing is regenerated with the additional context. No redundant work.
+**Manages multiple cases side by side.** Each case lives in its own folder under `~/Desktop/newcase/cases/`. The pipeline opens with an interactive case picker — pick an existing case to continue work on it, or create a new one in one step. Switching between cases requires no file shuffling.
+
+**Ships with incremental updates.** Add a new document to an existing case, run the pipeline again — only the new file gets processed (cached by SHA-256 hash), and the briefing is regenerated with the additional context. No redundant LLM work.
 
 ## 🎯 Who is this for?
 
