@@ -179,10 +179,45 @@ Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible d
 
 Ollama handles model loading and GPU offloading automatically. If it runs, it runs.
 
+### Multi-case workflow
+
+The pipeline manages multiple cases side by side. Each case lives in its own subfolder under `~/Desktop/newcase/cases/` with isolated `input/`, `extracted/`, `output/` and `.cache/` directories. No more shuffling files between runs.
+
+```
+~/Desktop/newcase/
+└── cases/
+    ├── 2026-05-03_satiamo/
+    │   ├── vertrag.pdf, email.msg, …   ← PDFs / MSGs / EMLs directly in the case root
+    │   ├── extracted/                   ← stage-1 output (markdown)
+    │   ├── output/                      ← klartext + anon summaries, chat saves
+    │   └── .cache/                      ← per-document hash cache
+    └── 2026-04-30_stadler-bau/
+        └── ...
+```
+
+Documents live directly in the case folder — no extra `input/` subdirectory. The pipeline ignores the `extracted/`, `output/` and `.cache/` subfolders when scanning for input documents (only files directly in the case root are processed).
+
+**Starting the pipeline:**
+
+```bash
+python pipeline.py                            # interactive case picker
+python pipeline.py --case stadler             # pick by name or substring
+python pipeline.py --new-case mietsache       # create new case + use it
+python pipeline.py --list-cases               # list and exit
+```
+
+Creating a new case interactively suggests `YYYY-MM-DD_neu` as the default. You can override with any free-form name — it gets slugified (umlauts → ae/oe/ue, spaces → `_`) and prefixed with today's date. So typing `Stadler Mietsache` becomes `2026-05-03_stadler_mietsache`.
+
+`chat.py` uses the same selection logic — pick which case to chat about, then it auto-loads the latest `KLARTEXT_*.md` from that case's `output/`.
+
+**Migration from single-case setup:** if you have an older `~/Desktop/newcase/` with `extracted/`, `output/` etc. directly inside (no `cases/` subfolder), the pipeline prints a hint on first run. Create your first case (`--new-case` or interactive `N`), then move your input files (PDFs, MSGs, …) directly into the new case folder and move `extracted/`, `output/`, `.cache/` underneath it.
+
 ## 🗂️ Project structure
 
 ```
 ├── pipeline.py       # Main orchestration script
+├── case_layer.py     # Multi-case management (discovery, creation, CLI)
+├── chat.py           # Interactive REPL against a case's briefing
 ├── config.py         # Configuration, prompts, model settings
 ├── extractor.py      # Text extraction (PDF, DOCX, MSG, OCR)
 ├── summarizer.py     # LLM calls (Ollama), anonymization
