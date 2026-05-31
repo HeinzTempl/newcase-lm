@@ -9,10 +9,13 @@ Verarbeitet Dokumente aus einem Eingangsordner:
 3b. Anonymisierte Gesamtübersicht (Cloud-Prompt)
 
 Verwendung:
-    python pipeline.py                  # Verarbeitet alle Dateien
-    python pipeline.py --extract-only   # Nur Text extrahieren, kein LLM
-    python pipeline.py --file doc.pdf   # Nur eine bestimmte Datei
-    python pipeline.py --skip-anon      # Nur Klartext, keine Anonymisierung
+    python pipeline.py                          # Interaktive Akten-Auswahl, dann verarbeiten
+    python pipeline.py --case stadler           # Akte anhand Name/Substring auswählen
+    python pipeline.py --new-case mietsache     # Neue Akte anlegen
+    python pipeline.py --list-cases             # Vorhandene Akten auflisten
+    python pipeline.py --extract-only           # Nur Text extrahieren, kein LLM
+    python pipeline.py --file doc.pdf           # Nur eine bestimmte Datei
+    python pipeline.py --skip-anon              # Nur Klartext, keine Anonymisierung
 
 Heinz Kanzlei-Pipeline v2.0
 """
@@ -26,8 +29,8 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+import case_layer
 from config import (
-    INPUT_DIR, OUTPUT_DIR, EXTRACTED_DIR, CACHE_DIR,
     SUPPORTED_EXTENSIONS, ENABLE_REDACTION_CHECK,
     ENABLE_VERIFICATION,
 )
@@ -106,22 +109,66 @@ def discover_files(input_dir: Path) -> list[Path]:
     return files
 
 
+def _wait_for_documents(input_dir: Path, files: list[Path]) -> list[Path]:
+    """
+    Falls keine Dateien gefunden: interaktiv warten, bis der User welche
+    in den Ordner gelegt hat. Erspart Heinz den Neustart nach 'neue Akte anlegen'.
+
+    Gibt die (eventuell nach Wartephase neu eingescannte) Dateiliste zurück.
+    Bei Abbruch (Q) → sys.exit(0).
+    """
+    if files:
+        return files
+
+    while True:
+        print()
+        print(f"  Keine Dokumente gefunden in:")
+        print(f"    {input_dir}")
+        print()
+        print(f"  Lege die Eingangsdateien (PDF, MSG, EML, DOCX, …) jetzt in den Ordner.")
+        print(f"  Du kannst den Ordner z.B. mit folgendem Befehl im Finder öffnen:")
+        print(f"    open \"{input_dir}\"")
+        print()
+        print(f"  [Enter] Erneut scannen   |   [Q] Abbrechen")
+        try:
+            choice = input("  Eingabe: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if choice in ("q", "quit", "exit"):
+            logger.info("Abgebrochen — keine Dokumente verarbeitet.")
+            sys.exit(0)
+        # leer (Enter) oder irgendwas anderes → nochmal scannen
+        files = discover_files(input_dir)
+        if files:
+            logger.info(f"  ✓ {len(files)} Dokument(e) gefunden, Pipeline läuft weiter.")
+            return files
+        # else: Schleife dreht weiter
+
+
 def run_pipeline(
-    input_dir: Path = INPUT_DIR,
-    output_dir: Path = OUTPUT_DIR,
+    case: case_layer.Case,
     extract_only: bool = False,
     single_file: Path = None,
     skip_anon: bool = False,
 ):
-    """Hauptpipeline v2: Extraktion → Klartext-Zusammenfassung → Anonymisierung."""
+    """Hauptpipeline v2: Extraktion → Klartext-Zusammenfassung → Anonymisierung.
+
+    Alle Pfade kommen aus dem übergebenen Case (Multi-Case-Layer).
+    """
+
+    input_dir = case.input_dir
+    output_dir = case.output_dir
+    extracted_dir = case.extracted_dir
+    cache_dir = case.cache_dir
 
     logger.info("=" * 60)
     logger.info("KANZLEI-PIPELINE v2 (Klartext-First)")
+    logger.info(f"  Akte: {case.name}")
     logger.info("=" * 60)
 
     # Ordner vorbereiten
-    output_dir.mkdir(parents=True, exist_ok=True)
-    EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
+    case.ensure_dirs()
 
     # Dateien finden
     if single_file:
@@ -131,17 +178,11 @@ def run_pipeline(
         files = [single_file]
     else:
         if not input_dir.exists():
-            logger.error(f"Eingangsordner nicht gefunden: {input_dir}")
-            logger.info(f"Erstelle Ordner: {input_dir}")
             input_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Bitte lege Dokumente in den Ordner und starte erneut.")
-            sys.exit(0)
         files = discover_files(input_dir)
 
-    if not files:
-        logger.info("Keine Dokumente gefunden. Lege Dateien in den Ordner:")
-        logger.info(f"  {input_dir}")
-        sys.exit(0)
+        # Wenn leer: User-friendly Wartemodus statt sofort abbrechen
+        files = _wait_for_documents(input_dir, files)
 
     logger.info(f"Gefunden: {len(files)} Dokument(e)")
     for f in files:
@@ -189,7 +230,7 @@ def run_pipeline(
                 logger.info(f"  → E-Mail + {len(attachment_texts)} Anhänge zusammengeführt")
 
         # Extrahierten Text speichern
-        md_path = save_extracted_text(result, EXTRACTED_DIR)
+        md_path = save_extracted_text(result, extracted_dir)
         logger.info(f"  → Gespeichert: {md_path.name}")
 
         extracted_docs.append(result)
@@ -198,7 +239,7 @@ def run_pipeline(
 
     if extract_only:
         logger.info("--extract-only: Überspringe LLM-Zusammenfassung")
-        logger.info(f"Extrahierte Texte liegen in: {EXTRACTED_DIR}")
+        logger.info(f"Extrahierte Texte liegen in: {extracted_dir}")
         return
 
     # ========================================
@@ -211,11 +252,11 @@ def run_pipeline(
 
     if not check_ollama_available():
         logger.error("Ollama nicht verfügbar - Zusammenfassung übersprungen")
-        logger.info(f"Extrahierte Texte liegen in: {EXTRACTED_DIR}")
+        logger.info(f"Extrahierte Texte liegen in: {extracted_dir}")
         sys.exit(1)
 
     # Cache laden
-    cache = _load_cache(CACHE_DIR)
+    cache = _load_cache(cache_dir)
     cache_hits = 0
 
     summaries = []
@@ -277,7 +318,7 @@ def run_pipeline(
         logger.info(f"  → {summary_path.name}")
 
     # Cache speichern
-    _save_cache(CACHE_DIR, cache)
+    _save_cache(cache_dir, cache)
     if cache_hits:
         logger.info(f"\nCache: {cache_hits} von {len(extracted_docs)} aus Cache geladen")
     logger.info(f"Klartext-Zusammenfassungen abgeschlossen: {len(summaries)} Dokumente")
@@ -446,7 +487,8 @@ def run_pipeline(
     logger.info("")
     logger.info("=" * 60)
     logger.info("PIPELINE v2 ABGESCHLOSSEN")
-    logger.info(f"  Extrahierte Texte:       {EXTRACTED_DIR}")
+    logger.info(f"  Akte:                    {case.name}")
+    logger.info(f"  Extrahierte Texte:       {extracted_dir}")
     logger.info(f"  Klartext-Zusammenfass.:   {output_dir}")
     if not skip_anon:
         logger.info(f"  Anonymisierte Version:   {output_dir}")
@@ -560,28 +602,27 @@ if __name__ == "__main__":
         help="Nur eine bestimmte Datei verarbeiten",
     )
     parser.add_argument(
-        "--input-dir",
-        type=Path,
-        default=INPUT_DIR,
-        help=f"Eingangsordner (Standard: {INPUT_DIR})",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=OUTPUT_DIR,
-        help=f"Ausgabeordner (Standard: {OUTPUT_DIR})",
-    )
-    parser.add_argument(
         "--skip-anon",
         action="store_true",
         help="Nur Klartext-Output, keine Anonymisierung (Stufe 3b überspringen)",
     )
+    # Case-Layer-Argumente (--case, --new-case, --list-cases)
+    case_layer.add_case_args(parser)
 
     args = parser.parse_args()
 
+    # Hinweis bei Legacy-Daten (alter Single-Case-Modus)
+    if case_layer.detect_legacy_data() and not (args.case or args.new_case or args.list_cases):
+        case_layer.print_migration_hint()
+
+    # Akte auswählen oder neu anlegen
+    selected_case = case_layer.select_or_create_case_from_args(args)
+
+    # Pfade in config.py auf den Case patchen (für Module, die config.X lesen)
+    case_layer.apply_case_to_config(selected_case)
+
     run_pipeline(
-        input_dir=args.input_dir,
-        output_dir=args.output_dir,
+        case=selected_case,
         extract_only=args.extract_only,
         single_file=args.file,
         skip_anon=args.skip_anon,

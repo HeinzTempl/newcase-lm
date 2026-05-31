@@ -9,9 +9,10 @@ Konversationsverlauf und führt einen REPL-Chat gegen das in config.py
 konfigurierte Ollama-Modell.
 
 Aufruf:
-    python chat.py                          # neueste Akte aus INPUT_DIR
-    python chat.py --briefing PFAD          # explizites Briefing
-    python chat.py --case ~/Desktop/falla   # anderes Akten-Verzeichnis
+    python chat.py                          # Interaktive Akten-Auswahl, dann Chat
+    python chat.py --case stadler           # Akte per Name/Substring auswählen
+    python chat.py --list-cases             # Vorhandene Akten auflisten
+    python chat.py --briefing PFAD          # explizites Briefing (überschreibt Auto-Discovery)
     python chat.py --full                   # Originaltexte direkt mitladen
 
 Slash-Befehle siehe /help im laufenden Chat.
@@ -28,12 +29,10 @@ from typing import Optional
 
 import requests
 
+import case_layer
 from config import (
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
-    OUTPUT_DIR,
-    EXTRACTED_DIR,
-    INPUT_DIR,
     NUM_CTX,
 )
 
@@ -228,15 +227,13 @@ def main():
         help="Pfad zum Briefing (default: neueste KLARTEXT_*.md im Output-Ordner)",
     )
     parser.add_argument(
-        "--case",
-        type=Path,
-        help="Akten-Wurzel (überschreibt INPUT_DIR aus config.py)",
-    )
-    parser.add_argument(
         "--full",
         action="store_true",
         help="Originaltexte aus extracted/ direkt mitladen",
     )
+    # Case-Layer-Argumente (--case, --new-case, --list-cases)
+    case_layer.add_case_args(parser)
+
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -244,14 +241,11 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    # Verzeichnisse bestimmen
-    if args.case:
-        case_root = args.case.expanduser()
-        output_dir = case_root / "output"
-        extracted_dir = case_root / "extracted"
-    else:
-        output_dir = OUTPUT_DIR
-        extracted_dir = EXTRACTED_DIR
+    # Akte auswählen (interaktiv oder per CLI-Argument)
+    selected_case = case_layer.select_or_create_case_from_args(args)
+    case_layer.apply_case_to_config(selected_case)
+    output_dir = selected_case.output_dir
+    extracted_dir = selected_case.extracted_dir
 
     # Briefing finden/laden
     briefing_path = args.briefing or find_latest_briefing(output_dir)
@@ -269,6 +263,7 @@ def main():
     # Header
     print(f"\n{C.BOLD}🏛️  Akten-Chat{C.RESET}")
     print(f"{C.DIM}{'─' * 60}{C.RESET}")
+    print(f"{C.CYAN}Akte:{C.RESET}             {selected_case.name}")
     print(f"{C.CYAN}Briefing:{C.RESET}          {briefing_path.name}")
     print(f"{C.CYAN}Modell:{C.RESET}            {OLLAMA_MODEL}")
     print(f"{C.CYAN}Kontext:{C.RESET}           {NUM_CTX:,} Tokens")

@@ -11,6 +11,11 @@ import os
 from pathlib import Path
 
 # === Ordner-Konfiguration ===
+# Diese vier Pfade sind die Defaults für den alten Single-Case-Modus.
+# Im Multi-Case-Modus (siehe case_layer.py) werden sie nach Akten-Auswahl
+# vom Case-Layer überschrieben via case_layer.apply_case_to_config(case).
+# Konsumenten sollten `import config; config.INPUT_DIR` verwenden, NICHT
+# `from config import INPUT_DIR` — sonst greift der Snapshot zum Importzeitpunkt.
 INPUT_DIR = Path.home() / "Desktop" / "newcase"
 OUTPUT_DIR = INPUT_DIR / "output"
 EXTRACTED_DIR = INPUT_DIR / "extracted"
