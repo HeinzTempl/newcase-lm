@@ -21,6 +21,8 @@ Everything runs locally on your machine. Nothing leaves your network. Ever.
 
 **Ships with incremental updates.** Add a new document to an existing case, run the pipeline again — only the new file gets processed (cached by SHA-256 hash), and the briefing is regenerated with the additional context. No redundant LLM work.
 
+**Handles multilingual cases out of the box.** With `gemma4:31b-mlx-bf16`, foreign-language documents (e.g. Slovenian, Italian, English) are processed and summarized directly in German — no separate translation pass required. See the "Multilingual support" section below for hardware notes.
+
 ## 🎯 Who is this for?
 
 Anyone who works with legal documents and wants AI assistance without compromising confidentiality: law firms, in-house legal teams, courts, government agencies, compliance departments, insurance companies. If you handle sensitive case files and need structured briefings, this is for you.
@@ -168,8 +170,7 @@ Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible d
 | RAM | `NEWCASE_NUM_CTX` | `NEWCASE_MAX_TEXT_LENGTH` |
 |---|---|---|
 | 64 GB | 32768 (default) | 60000 (default) |
-| 128 GB | 65536 | 120000 |
-| 256 GB+ | 131072 | 200000 |
+| 128 GB+ | 65536 – 131072 | 120000 – 200000 |
 
 ### Hardware requirements
 
@@ -180,6 +181,18 @@ Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible d
 | **Budget option** | Use `gemma4:31b-it-q4_0` (~18GB) on 32GB machines — works, slightly drier output. |
 
 Ollama handles model loading and GPU offloading automatically. If it runs, it runs.
+
+### Multilingual support
+
+The default model `qwen3.6:35b-a3b-mlx-bf16` works well for German cases. For cases containing documents in other languages (Slovenian, Italian, English, French, …), switch to `gemma4:31b-mlx-bf16` — it reads the source language and writes the briefing directly in German, without a separate translation step:
+
+```bash
+NEWCASE_OLLAMA_MODEL=gemma4:31b-mlx-bf16 python pipeline.py
+```
+
+Tested with Slovenian legal documents on Apple Silicon: 5 documents extracted, summarized and merged into a clean German briefing in roughly 30 minutes. Names, dates, amounts and legal references are preserved exactly as in the source.
+
+⚠️ **Hardware note**: Gemma 4 31B in BF16 is a **dense** model — all 31 billion parameters are read per token, vs. only ~3 B for the MoE default. RAM footprint is similar (~62 GB), but token throughput drops from ~60 tok/s to ~10 tok/s on Apple Silicon. Plan for a Mac with **64 GB+ unified memory** and roughly **5× longer pipeline runs** compared to the default Qwen MoE model. For larger cases (20+ documents), consider whether the time investment is worth it case by case. For pure German cases, the default Qwen model is faster and equally accurate.
 
 ### Multi-case workflow
 
