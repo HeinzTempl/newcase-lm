@@ -21,7 +21,7 @@ Everything runs locally on your machine. Nothing leaves your network. Ever.
 
 **Ships with incremental updates.** Add a new document to an existing case, run the pipeline again — only the new file gets processed (cached by SHA-256 hash), and the briefing is regenerated with the additional context. No redundant LLM work.
 
-**Handles multilingual cases out of the box.** With `gemma4:31b-mlx-bf16`, foreign-language documents (e.g. Slovenian, Italian, English) are processed and summarized directly in German — no separate translation pass required. See the "Multilingual support" section below for hardware notes.
+**Handles multilingual cases out of the box.** Foreign-language documents (Slovenian, Italian, English, …) are processed and summarized directly in German — no separate translation pass required. The MLX-BF16 build of Gemma 4 31B works particularly well for this; see "Multilingual support" below.
 
 ## 🎯 Who is this for?
 
@@ -143,7 +143,10 @@ Trade-off: doubled stage-2 runtime (in practice 30–40% overhead, since each pa
 The default context window is 32,768 tokens (`NUM_CTX` in `config.py`). This comfortably handles individual documents up to ~60,000 characters and combined briefings from up to ~10–15 documents. For larger cases, raise it via environment variables — no code change required:
 
 ```bash
-# Choose a different model than the default gemma4:31b-it-q8_0
+# Choose a different model than the default gemma4:31b-it-q8_0.
+# On Apple Silicon, the Qwen3.6 MoE build is ~3× faster than dense models
+# of comparable quality (3B active parameters per token) — recommended
+# for users with 64 GB+ unified memory who run the pipeline often:
 export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16
 
 # Larger context (more KV-cache RAM, but Ollama handles it automatically)
@@ -213,24 +216,28 @@ export NEWCASE_BACKEND=ollama
 
 The same `NEWCASE_OLLAMA_TIMEOUT` applies — cloud calls can be slow when contexts get large.
 
-⚠️ **Confidentiality considerations for legal use.** Sending case material through a cloud API means the data leaves your jurisdiction. Most providers contractually exclude API data from training (Mistral, OpenAI, Anthropic all do as of 2026), but the data is still processed and logged in their datacenters. For real client work consider:
+**Confidentiality considerations for legal use.** Sending case material through a cloud API means the data is processed in a third-party datacenter. Most providers contractually exclude API data from training (Mistral, OpenAI, Anthropic all do as of 2026), so the main remaining concerns are jurisdiction, persistence and client-confidentiality rules.
 
-- **Run the anonymization stage (3b) locally first**, then feed only the anonymized output to the cloud for further analysis. The `ANON_*.md` file is designed exactly for that use case.
-- **Prefer EU-hosted providers** (Mistral, Aleph Alpha, …) over US-hosted ones if GDPR compliance matters to you. EU-Datacenter, no US CLOUD Act exposure.
-- **Have a data processing agreement (DPA / AVV)** in place with whoever you use.
-- For pure benchmarking with non-real-client data: just use the cloud directly and compare against your local output.
+For Austrian lawyers specifically: The amended RL-BA (Standesrichtlinien) clarifies that a contractual obligation of the provider regarding house-search notifications is **not required** where data is processed **transiently, not persistently, and only for the minimum duration and scope necessary by an automated system**. Standard API calls to an LLM provider — where the request is processed in-flight and the response returned without persistent storage of case content — fall under this exception. This significantly lowers the standards-law (anwaltsstandesrechtlich) bar for routine cloud-API usage.
+
+Independently of that, GDPR and general client-confidentiality considerations still apply:
+
+- **Prefer EU-hosted providers** (Mistral, Aleph Alpha, …) over US-hosted ones to stay clear of CLOUD-Act exposure and to keep GDPR compliance simple.
+- **A data processing agreement (DPA / AVV)** is the regular GDPR baseline for cloud processing of personal data and should be in place.
+- For highly sensitive material (Art. 9 GDPR data, criminal cases, particularly delicate client matters), running the **anonymization stage (3b) locally first** and only feeding the `ANON_*.md` output to the cloud remains the cleanest option.
+- For pure benchmarking with non-client data: use the cloud directly and compare to your local output.
 
 ### Multilingual support
 
-The default model `qwen3.6:35b-a3b-mlx-bf16` works well for German cases. For cases containing documents in other languages (Slovenian, Italian, English, French, …), switch to `gemma4:31b-mlx-bf16` — it reads the source language and writes the briefing directly in German, without a separate translation step:
+The default model `gemma4:31b-it-q8_0` already handles many foreign-language documents reasonably well. For cleaner multilingual results — when documents are in Slovenian, Italian, French, or mixed — switch to the BF16 MLX variant of the same model family:
 
 ```bash
 NEWCASE_OLLAMA_MODEL=gemma4:31b-mlx-bf16 python pipeline.py
 ```
 
-Tested with Slovenian legal documents on Apple Silicon: 5 documents extracted, summarized and merged into a clean German briefing in roughly 30 minutes. Names, dates, amounts and legal references are preserved exactly as in the source.
+This reads the source language and writes the briefing directly in German, without a separate translation step. Tested with Slovenian legal documents on Apple Silicon: 5 documents extracted, summarized and merged into a clean German briefing in roughly 30 minutes. Names, dates, amounts and legal references are preserved exactly as in the source.
 
-⚠️ **Hardware note**: Gemma 4 31B in BF16 is a **dense** model — all 31 billion parameters are read per token, vs. only ~3 B for the MoE default. RAM footprint is similar (~62 GB), but token throughput drops from ~60 tok/s to ~10 tok/s on Apple Silicon. Plan for a Mac with **64 GB+ unified memory** and roughly **5× longer pipeline runs** compared to the default Qwen MoE model. For larger cases (20+ documents), consider whether the time investment is worth it case by case. For pure German cases, the default Qwen model is faster and equally accurate.
+⚠️ **Hardware note**: The BF16 MLX build is a **dense** model — all 31 billion parameters are read per token, RAM footprint ~62 GB, token throughput ~10 tok/s on Apple Silicon. Plan for **64 GB+ unified memory** and roughly 3× longer pipeline runs vs. the Q8 default. For pure German cases, stick with the Q8 default — it's faster and the multilingual benefit isn't relevant.
 
 ### Multi-case workflow
 
