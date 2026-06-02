@@ -15,6 +15,9 @@ import requests
 from pathlib import Path
 
 from config import (
+    NEWCASE_BACKEND,
+    NEWCASE_API_BASE_URL,
+    NEWCASE_API_KEY,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
     OLLAMA_TIMEOUT,
@@ -45,7 +48,19 @@ MAIL_EXTENSIONS = {".msg", ".eml"}
 logger = logging.getLogger(__name__)
 
 
+def check_backend_available() -> bool:
+    """Prüft, ob das konfigurierte Backend bereit ist."""
+    if NEWCASE_BACKEND == "openai_compat":
+        return _check_openai_compat_available()
+    return _check_ollama_available()
+
+
+# Backwards-Compat-Alias (für ältere Aufrufer wie pipeline.py)
 def check_ollama_available() -> bool:
+    return check_backend_available()
+
+
+def _check_ollama_available() -> bool:
     """Prüft ob Ollama läuft und das Modell verfügbar ist."""
     try:
         resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
@@ -72,6 +87,27 @@ def check_ollama_available() -> bool:
             "Ollama nicht erreichbar. Starte Ollama mit: ollama serve"
         )
         return False
+
+
+def _check_openai_compat_available() -> bool:
+    """Prüft, ob die Cloud-API-Konfiguration plausibel gesetzt ist.
+
+    Kein echter Healthcheck (kostet API-Tokens), nur Sanity-Check der Env-Vars.
+    """
+    if not NEWCASE_API_KEY:
+        logger.error(
+            "NEWCASE_API_KEY ist nicht gesetzt — Cloud-Backend nicht nutzbar."
+        )
+        return False
+    if not NEWCASE_API_BASE_URL:
+        logger.error(
+            "NEWCASE_API_BASE_URL ist nicht gesetzt — z.B. https://api.mistral.ai/v1"
+        )
+        return False
+    logger.info(
+        f"Cloud-Backend OK — {NEWCASE_API_BASE_URL} mit Modell '{OLLAMA_MODEL}'"
+    )
+    return True
 
 
 def summarize_document(extracted: dict) -> dict:
@@ -114,7 +150,7 @@ def summarize_document(extracted: dict) -> dict:
         # Bei E-Mails behalten wir den dedizierten Mail-Prompt (Header-Tabelle + Inhalt),
         # weil der bereits eine andere Strukturierung vornimmt.
         logger.info(f"  [Two-Stage] Pass 1/2 — Faktenextraktion ...")
-        facts = _call_ollama(
+        facts = _call_llm(
             system_prompt=EXTRACT_SYSTEM_PROMPT,
             user_prompt=EXTRACT_USER_PROMPT_TEMPLATE.format(document_text=text),
             label=f"Extract: {extracted['source_file']}",
@@ -124,13 +160,13 @@ def summarize_document(extracted: dict) -> dict:
             return {"summary": facts, "verified": False, "issues": ["LLM-Fehler bei Faktenextraktion"]}
 
         logger.info(f"  [Two-Stage] Pass 2/2 — Sachverhalt formulieren ...")
-        summary = _call_ollama(
+        summary = _call_llm(
             system_prompt=WRITE_SYSTEM_PROMPT,
             user_prompt=WRITE_USER_PROMPT_TEMPLATE.format(facts=facts),
             label=f"Write: {extracted['source_file']}",
         )
     else:
-        summary = _call_ollama(
+        summary = _call_llm(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             label=f"{label_prefix}: {extracted['source_file']}",
@@ -183,7 +219,7 @@ def _verify_summary(original_text: str, summary: str) -> dict:
         summary=summary,
     )
 
-    response = _call_ollama(
+    response = _call_llm(
         system_prompt=VERIFICATION_SYSTEM_PROMPT,
         user_prompt=prompt,
     )
@@ -239,7 +275,7 @@ FEHLERHAFTE ZUSAMMENFASSUNG:
 
 KORRIGIERTE ZUSAMMENFASSUNG:"""
 
-    return _call_ollama(
+    return _call_llm(
         system_prompt=SUMMARY_SYSTEM_PROMPT,
         user_prompt=prompt,
     )
@@ -270,7 +306,7 @@ Dokumente mit ⚠ sind nicht vollständig verifiziert - kennzeichne diese Info.
 {combined}
 """
 
-    response = _call_ollama(
+    response = _call_llm(
         system_prompt=ACT_SUMMARY_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         label=f"Gesamtbriefing ({len(document_summaries)} Dokumente)",
@@ -286,7 +322,7 @@ def anonymize_text(klartext: str) -> str:
     """
     user_prompt = ANON_USER_PROMPT_TEMPLATE.format(text=klartext)
 
-    response = _call_ollama(
+    response = _call_llm(
         system_prompt=ANON_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         label="Anonymisierung",
@@ -366,3 +402,98 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
     except Exception as e:
         logger.error(f"Ollama Fehler: {e}")
         return f"[FEHLER: {e}]"
+
+
+def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -> str:
+    """Ruft eine OpenAI-kompatible Cloud-API auf (Mistral, OpenAI, Anthropic, …).
+
+    Unterstützt jedes Backend, das `/chat/completions` als Endpoint anbietet:
+        - Mistral La Plateforme (https://api.mistral.ai/v1)
+        - OpenAI (https://api.openai.com/v1)
+        - Anthropic (https://api.anthropic.com/v1)
+        - LM Studio, vLLM, oMLX (jeweils mit eigener Base-URL)
+    """
+    if not NEWCASE_API_KEY or not NEWCASE_API_BASE_URL:
+        logger.error("Cloud-Backend: NEWCASE_API_KEY oder NEWCASE_API_BASE_URL fehlt")
+        return "[FEHLER: API-Konfiguration unvollständig]"
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.7,
+        "top_p": 0.95,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {NEWCASE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        t_start = time.time()
+        resp = requests.post(
+            f"{NEWCASE_API_BASE_URL.rstrip('/')}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=OLLAMA_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        t_elapsed = time.time() - t_start
+
+        content = data["choices"][0]["message"]["content"]
+
+        # OpenAI-Format: usage.prompt_tokens / completion_tokens
+        usage = data.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        total_tokens = prompt_tokens + output_tokens
+        tok_per_sec = output_tokens / t_elapsed if t_elapsed > 0 else 0
+        prefix = f"[{label}] " if label else ""
+
+        logger.info(
+            f"  {prefix}☁️  {prompt_tokens:,} prompt + {output_tokens:,} output "
+            f"= {total_tokens:,} tokens "
+            f"| {tok_per_sec:.1f} tok/s | {t_elapsed:.0f}s | via {NEWCASE_API_BASE_URL}"
+        )
+
+        # Thinking-Blöcke entfernen (manche Modelle geben sowas aus)
+        if "<think>" in content:
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+        return content
+
+    except requests.Timeout:
+        logger.error("Cloud-API Timeout — Modell zu langsam oder Anfrage zu groß")
+        return "[FEHLER: Timeout bei Cloud-API]"
+
+    except requests.ConnectionError as e:
+        logger.error(f"Cloud-API nicht erreichbar: {e}")
+        return "[FEHLER: Cloud-API nicht erreichbar]"
+
+    except requests.HTTPError as e:
+        # Detaillierte Fehler aus dem Response-Body extrahieren wenn möglich
+        try:
+            err_body = resp.json().get("error", {})
+            err_msg = err_body.get("message", str(e)) if isinstance(err_body, dict) else str(err_body)
+        except Exception:
+            err_msg = str(e)
+        logger.error(f"Cloud-API HTTP-Fehler: {err_msg}")
+        return f"[FEHLER: Cloud-API: {err_msg}]"
+
+    except Exception as e:
+        logger.error(f"Cloud-API Fehler: {e}")
+        return f"[FEHLER: {e}]"
+
+
+def _call_llm(system_prompt: str, user_prompt: str, label: str = "") -> str:
+    """Backend-agnostic LLM-Call — dispatcht je nach NEWCASE_BACKEND.
+
+    Default: Ollama (lokal). Alternativ: OpenAI-kompatible Cloud-API.
+    """
+    if NEWCASE_BACKEND == "openai_compat":
+        return _call_openai_compat(system_prompt, user_prompt, label)
+    return _call_ollama(system_prompt, user_prompt, label)

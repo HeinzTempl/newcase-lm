@@ -26,12 +26,38 @@ SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".msg", ".eml", ".txt", ".rtf",
 }
 
-# === Ollama-Konfiguration ===
+# === Backend-Auswahl ===
+# "ollama" (default, lokal) oder "openai_compat" (Cloud: Mistral, OpenAI,
+# Anthropic, vLLM, LM Studio etc.). Switching via Env-Variable:
+#   export NEWCASE_BACKEND=openai_compat
+NEWCASE_BACKEND = os.environ.get("NEWCASE_BACKEND", "ollama").lower()
+
+# === Ollama-Konfiguration (für Backend "ollama") ===
 # Modell ist via Env-Variable überschreibbar – so kann jede Maschine ihr eigenes
 # Modell fahren ohne Code-Änderung:
-#   export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16   # auf großem Mac Studio
+#   export NEWCASE_MODEL=qwen3.6:35b-a3b-mlx-bf16   # neuer Name
+#   export NEWCASE_OLLAMA_MODEL=qwen3.6:35b-a3b-mlx-bf16   # alter Name (Backwards-Compat)
 OLLAMA_BASE_URL = os.environ.get("NEWCASE_OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("NEWCASE_OLLAMA_MODEL", "gemma4:31b-it-q8_0")
+OLLAMA_MODEL = os.environ.get(
+    "NEWCASE_MODEL",
+    os.environ.get("NEWCASE_OLLAMA_MODEL", "gemma4:31b-it-q8_0"),
+)
+
+# === OpenAI-kompatible Cloud-API (für Backend "openai_compat") ===
+# Konfigurationsbeispiele:
+#   Mistral (EU, DSGVO-freundlich):
+#     export NEWCASE_API_BASE_URL=https://api.mistral.ai/v1
+#     export NEWCASE_MODEL=mistral-large-latest
+#   OpenAI:
+#     export NEWCASE_API_BASE_URL=https://api.openai.com/v1
+#     export NEWCASE_MODEL=gpt-5
+#   Anthropic (OpenAI-kompatibler Endpoint):
+#     export NEWCASE_API_BASE_URL=https://api.anthropic.com/v1
+#     export NEWCASE_MODEL=claude-sonnet-4-6
+#   In allen Fällen zusätzlich:
+#     export NEWCASE_API_KEY=<dein-api-key>
+NEWCASE_API_BASE_URL = os.environ.get("NEWCASE_API_BASE_URL", "")
+NEWCASE_API_KEY = os.environ.get("NEWCASE_API_KEY", "")
 
 # === Kontextfenster ===
 # Default 32k passt für 64GB-Maschinen mit Gemma4-31B Q8.
