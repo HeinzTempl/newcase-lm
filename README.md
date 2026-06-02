@@ -182,6 +182,44 @@ Put these in your `~/.zshrc` (or `~/.bashrc`) to make them permanent. Sensible d
 
 Ollama handles model loading and GPU offloading automatically. If it runs, it runs.
 
+### Cloud backends (optional)
+
+For benchmarking against frontier models or when local hardware is unavailable, the LLM stages (2, 3a, 3b) can run against any OpenAI-compatible API instead of a local Ollama instance. **Text extraction (stage 1) always stays local** — no document content leaves your machine until the LLM call.
+
+Configuration is purely via environment variables, no code change required:
+
+```bash
+# Switch the backend
+export NEWCASE_BACKEND=openai_compat
+export NEWCASE_API_KEY=<your-api-key>
+
+# Pick a provider:
+
+# Mistral (EU-hosted — preferable for GDPR-sensitive data)
+export NEWCASE_API_BASE_URL=https://api.mistral.ai/v1
+export NEWCASE_MODEL=mistral-large-latest
+
+# OpenAI
+export NEWCASE_API_BASE_URL=https://api.openai.com/v1
+export NEWCASE_MODEL=gpt-5
+
+# Anthropic (OpenAI-compatible endpoint)
+export NEWCASE_API_BASE_URL=https://api.anthropic.com/v1
+export NEWCASE_MODEL=claude-sonnet-4-6
+
+# Back to local Ollama
+export NEWCASE_BACKEND=ollama
+```
+
+The same `NEWCASE_OLLAMA_TIMEOUT` applies — cloud calls can be slow when contexts get large.
+
+⚠️ **Confidentiality considerations for legal use.** Sending case material through a cloud API means the data leaves your jurisdiction. Most providers contractually exclude API data from training (Mistral, OpenAI, Anthropic all do as of 2026), but the data is still processed and logged in their datacenters. For real client work consider:
+
+- **Run the anonymization stage (3b) locally first**, then feed only the anonymized output to the cloud for further analysis. The `ANON_*.md` file is designed exactly for that use case.
+- **Prefer EU-hosted providers** (Mistral, Aleph Alpha, …) over US-hosted ones if GDPR compliance matters to you. EU-Datacenter, no US CLOUD Act exposure.
+- **Have a data processing agreement (DPA / AVV)** in place with whoever you use.
+- For pure benchmarking with non-real-client data: just use the cloud directly and compare against your local output.
+
 ### Multilingual support
 
 The default model `qwen3.6:35b-a3b-mlx-bf16` works well for German cases. For cases containing documents in other languages (Slovenian, Italian, English, French, …), switch to `gemma4:31b-mlx-bf16` — it reads the source language and writes the briefing directly in German, without a separate translation step:
