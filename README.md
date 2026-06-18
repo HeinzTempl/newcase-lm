@@ -30,10 +30,10 @@ Anyone who works with legal documents and wants AI assistance without compromisi
 ## ⚙️ How it works
 
 ```
-Your case files (PDF, DOCX, MSG, EML, TXT, RTF, ...)
+Your case files (PDF, DOCX, MSG, EML, TXT, RTF, PNG/JPG, ...)
     │
     ▼
-[Stage 1]  Text extraction (OCR, email parsing, attachment unpacking)
+[Stage 1]  Text extraction (PDF/image OCR, email parsing, attachment unpacking)
     │
     ▼
 [Stage 2]  Per-document summaries via local LLM (full detail, real names)
@@ -121,6 +121,22 @@ The `output/` folder will contain:
 The pipeline caches document summaries based on file hashes. When you add a new document to an existing case and re-run the pipeline, only the new document is summarized — cached results are reused. The overall briefing is then regenerated with the full context, including the new material.
 
 To reset the cache, delete the `.cache/` folder inside your input directory.
+
+## 🖼️ Image OCR (screenshots)
+
+Image files (`.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp`, `.bmp`) — typically WhatsApp screenshots clients send in — are read via Tesseract OCR (same local engine as the scanned-PDF path; install with `brew install tesseract tesseract-lang`). Extracted text is flagged with an `⚠ OCR` notice and a confidence score so you can sanity-check it.
+
+OCR deliberately transcribes only what is on the image; it does not "interpret" or smooth the text the way a vision model would. For potential evidence (a screenshot of a chat or a transfer) that is the safer choice — a poor scan yields garbage you can spot, not a plausible but invented sentence.
+
+To avoid noise from incidental images (email-signature logos, icons, tracking pixels — especially when they arrive as mail attachments), three filters run *before* any text is returned; if an image is rejected, nothing is appended to the document text and the reason is recorded in metadata:
+
+| Env variable | Default | Purpose |
+|--------------|---------|---------|
+| `NEWCASE_OCR_IMAGES` | `1` | Master switch (`0` disables image OCR entirely) |
+| `NEWCASE_OCR_IMAGE_MIN_DIM` | `200` | Skip images smaller than this (logos/icons/pixels) |
+| `NEWCASE_OCR_IMAGE_MIN_CHARS` | `20` | Drop results with too few real characters |
+| `NEWCASE_OCR_IMAGE_MIN_CONFIDENCE` | `40` | Drop results below this mean OCR confidence |
+| `NEWCASE_OCR_IMAGE_LANG` | `deu+eng` | Tesseract languages |
 
 ## 🖥️ Hardware, model & scaling
 
@@ -279,7 +295,7 @@ Creating a new case interactively suggests `YYYY-MM-DD_neu` as the default. You 
 ├── case_layer.py     # Multi-case management (discovery, creation, CLI)
 ├── chat.py           # Interactive REPL against a case's briefing
 ├── config.py         # Configuration, prompts, model settings
-├── extractor.py      # Text extraction (PDF, DOCX, MSG, OCR)
+├── extractor.py      # Text extraction (PDF, DOCX, MSG, image OCR)
 ├── summarizer.py     # LLM calls (Ollama), anonymization
 ├── docx_export.py    # Markdown → Word document conversion
 ├── requirements.txt  # Python dependencies

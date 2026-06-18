@@ -22,9 +22,33 @@ EXTRACTED_DIR = INPUT_DIR / "extracted"
 CACHE_DIR = INPUT_DIR / ".cache"
 
 # === Unterstützte Dateitypen ===
+# Bild-Endungen werden per OCR verarbeitet (siehe Bild-OCR-Konfiguration unten).
+IMAGE_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp",
+}
+
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".msg", ".eml", ".txt", ".rtf",
-}
+} | IMAGE_EXTENSIONS
+
+# === Bild-OCR-Konfiguration ===
+# Bilder (PNG/JPG, z.B. WhatsApp-Screenshots) werden per Tesseract-OCR gelesen.
+# Achtung: Bilder kommen auch als E-Mail-Anhänge daher (Signatur-Logos, Icons,
+# Tracking-Pixel). Damit dieser Beifang nicht als Rauschen im Mail-Text landet,
+# greifen drei Filter, BEVOR überhaupt Text zurückgegeben wird:
+#   1. Größe:      Bilder unter OCR_IMAGE_MIN_DIM px Kantenlänge werden gar
+#                  nicht erst OCR't (Logos/Icons/Pixel).
+#   2. Mindestlänge: Weniger als OCR_IMAGE_MIN_CHARS echte Zeichen → verworfen.
+#   3. Konfidenz:  Liegt die mittlere Tesseract-Word-Confidence unter
+#                  OCR_IMAGE_MIN_CONFIDENCE → verworfen (verzerrter Logo-Text).
+# Komplett abschaltbar via NEWCASE_OCR_IMAGES=0.
+OCR_IMAGES = os.environ.get("NEWCASE_OCR_IMAGES", "1").lower() not in ("0", "false", "no")
+OCR_IMAGE_MIN_DIM = int(os.environ.get("NEWCASE_OCR_IMAGE_MIN_DIM", 200))
+OCR_IMAGE_MIN_CHARS = int(os.environ.get("NEWCASE_OCR_IMAGE_MIN_CHARS", 20))
+OCR_IMAGE_MIN_CONFIDENCE = float(os.environ.get("NEWCASE_OCR_IMAGE_MIN_CONFIDENCE", 40))
+# Tesseract-Sprachen und Ziel-Auflösung (Upscaling-Untergrenze der kurzen Kante).
+OCR_IMAGE_LANG = os.environ.get("NEWCASE_OCR_IMAGE_LANG", "deu+eng")
+OCR_IMAGE_TARGET_MIN_SIDE = int(os.environ.get("NEWCASE_OCR_IMAGE_TARGET_MIN_SIDE", 1500))
 
 # === Backend-Auswahl ===
 # "ollama" (default, lokal) oder "openai_compat" (Cloud: Mistral, OpenAI,

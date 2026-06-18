@@ -34,6 +34,13 @@ def extract_file(filepath: Path) -> dict:
         ".eml": extract_eml,
         ".txt": extract_txt,
         ".rtf": extract_rtf,
+        ".png": extract_image,
+        ".jpg": extract_image,
+        ".jpeg": extract_image,
+        ".tif": extract_image,
+        ".tiff": extract_image,
+        ".webp": extract_image,
+        ".bmp": extract_image,
     }
 
     extractor = extractors.get(ext)
@@ -391,6 +398,153 @@ def extract_rtf(filepath: Path) -> dict:
         "metadata": _get_file_metadata(filepath),
         "attachments": [],
     }
+
+
+# === Bild-Extraktion (OCR via Tesseract) ===
+
+def _ocr_config():
+    """Liest OCR-Schwellen aus config (mit Fallback-Defaults, falls config fehlt)."""
+    try:
+        import config
+        return {
+            "enabled": config.OCR_IMAGES,
+            "min_dim": config.OCR_IMAGE_MIN_DIM,
+            "min_chars": config.OCR_IMAGE_MIN_CHARS,
+            "min_conf": config.OCR_IMAGE_MIN_CONFIDENCE,
+            "lang": config.OCR_IMAGE_LANG,
+            "target_min_side": config.OCR_IMAGE_TARGET_MIN_SIDE,
+        }
+    except Exception:
+        return {
+            "enabled": True, "min_dim": 200, "min_chars": 20,
+            "min_conf": 40.0, "lang": "deu+eng", "target_min_side": 1500,
+        }
+
+
+def extract_image(filepath: Path) -> dict:
+    """
+    OCR-Extraktion für Bilddateien (PNG/JPG/TIFF/... – z.B. WhatsApp-Screenshots).
+
+    Drei Rausch-Filter verhindern, dass Beifang-Bilder (Signatur-Logos, Icons,
+    Tracking-Pixel – v.a. als E-Mail-Anhang) Müll in den Text spülen:
+      1. Größe (min_dim), 2. Mindest-Zeichenzahl, 3. mittlere OCR-Konfidenz.
+    Wird ein Bild verworfen, ist extracted_text leer (== kein Anhängen in der
+    Pipeline); der Grund steht in metadata["ocr_skip"].
+    """
+    cfg = _ocr_config()
+    metadata = _get_file_metadata(filepath)
+
+    if not cfg["enabled"]:
+        metadata["ocr_skip"] = "Bild-OCR per Konfiguration deaktiviert (NEWCASE_OCR_IMAGES=0)"
+        return {"extracted_text": "", "metadata": metadata, "attachments": []}
+
+    # Tesseract vorhanden?
+    import subprocess
+    try:
+        subprocess.run(["tesseract", "--version"], capture_output=True, timeout=5)
+    except FileNotFoundError:
+        logger.warning("  Tesseract nicht installiert (brew install tesseract tesseract-lang)")
+        metadata["ocr_skip"] = "Tesseract nicht installiert"
+        return {
+            "extracted_text": "[BILD: OCR nicht möglich – Tesseract nicht installiert "
+            "(brew install tesseract tesseract-lang)]",
+            "metadata": metadata, "attachments": [],
+        }
+
+    # Vorverarbeitung: Graustufen + Hochskalieren via PyMuPDF (kein Pillow nötig)
+    tmp_png = filepath.parent / f"_ocr_img_{filepath.stem}.png"
+    ocr_input = filepath
+    width = height = None
+    try:
+        import fitz
+        doc = fitz.open(str(filepath))
+        page = doc[0]
+        rect = page.rect
+        width, height = rect.width, rect.height
+        short_side = min(width, height) if min(width, height) > 0 else 1
+        zoom = max(1.0, cfg["target_min_side"] / short_side)
+        zoom = min(zoom, 4.0)  # Deckel gegen riesige Temp-Bilder
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY)
+        pix.save(str(tmp_png))
+        doc.close()
+        ocr_input = tmp_png
+    except Exception as e:
+        # fitz kann das Format nicht öffnen (z.B. manche webp-Builds) → Original an Tesseract
+        logger.info(f"  Bild-Vorverarbeitung übersprungen ({e}); OCR auf Originaldatei")
+
+    # Größen-Filter (Logos/Icons/Tracking-Pixel gar nicht erst OCR'en)
+    if width is not None and min(width, height) < cfg["min_dim"]:
+        tmp_png.unlink(missing_ok=True)
+        logger.info(f"  Bild zu klein ({int(width)}x{int(height)}px) – übersprungen: {filepath.name}")
+        metadata["ocr_skip"] = f"Bild zu klein ({int(width)}x{int(height)}px < {cfg['min_dim']}px)"
+        metadata["image_size"] = f"{int(width)}x{int(height)}"
+        return {"extracted_text": "", "metadata": metadata, "attachments": []}
+
+    # OCR mit TSV-Output (liefert Wort-Konfidenzen für den Rausch-Filter)
+    text, mean_conf = "", 0.0
+    try:
+        result = subprocess.run(
+            ["tesseract", str(ocr_input), "stdout", "-l", cfg["lang"], "tsv"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            text, mean_conf = _parse_tesseract_tsv(result.stdout)
+    except subprocess.TimeoutExpired:
+        metadata["ocr_skip"] = "OCR-Timeout"
+        tmp_png.unlink(missing_ok=True)
+        return {"extracted_text": "", "metadata": metadata, "attachments": []}
+    finally:
+        tmp_png.unlink(missing_ok=True)
+
+    # Rausch-Filter: Mindestlänge + Konfidenz
+    alnum = sum(c.isalnum() for c in text)
+    if alnum < cfg["min_chars"] or mean_conf < cfg["min_conf"]:
+        logger.info(
+            f"  Bild verworfen (Zeichen={alnum}, Konfidenz={mean_conf:.0f}): {filepath.name}"
+        )
+        metadata["ocr_skip"] = (
+            f"kein verwertbarer Text (Zeichen={alnum} < {cfg['min_chars']} "
+            f"oder Konfidenz={mean_conf:.0f} < {cfg['min_conf']:.0f})"
+        )
+        return {"extracted_text": "", "metadata": metadata, "attachments": []}
+
+    metadata["ocr"] = True
+    metadata["ocr_confidence"] = round(mean_conf, 1)
+    metadata["hinweis"] = "Text wurde per Bild-OCR extrahiert – Qualität ggf. prüfen"
+    text = (
+        f"[⚠ OCR-EXTRAKTION (Bild, Konfidenz ~{mean_conf:.0f}%) – "
+        f"Qualität bitte prüfen]\n\n{text}"
+    )
+    logger.info(f"  Bild-OCR erfolgreich (Konfidenz ~{mean_conf:.0f}%): {filepath.name}")
+
+    return {"extracted_text": text, "metadata": metadata, "attachments": []}
+
+
+def _parse_tesseract_tsv(tsv: str) -> tuple[str, float]:
+    """Parst Tesseract-TSV → (rekonstruierter Text, mittlere Wort-Konfidenz)."""
+    import csv
+    import io
+
+    confidences = []
+    lines = {}  # (block, par, line) -> [words]
+    reader = csv.DictReader(io.StringIO(tsv), delimiter="\t")
+    for row in reader:
+        try:
+            level = int(row.get("level", 0))
+            conf = float(row.get("conf", -1))
+        except (ValueError, TypeError):
+            continue
+        word = (row.get("text") or "").strip()
+        if level != 5 or not word:  # level 5 == einzelnes Wort
+            continue
+        if conf >= 0:
+            confidences.append(conf)
+        key = (row.get("block_num"), row.get("par_num"), row.get("line_num"))
+        lines.setdefault(key, []).append(word)
+
+    text = "\n".join(" ".join(words) for words in lines.values()).strip()
+    mean_conf = sum(confidences) / len(confidences) if confidences else 0.0
+    return text, mean_conf
 
 
 # === Hilfsfunktionen ===
