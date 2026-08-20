@@ -50,7 +50,9 @@ The pipeline uses real names and details throughout Stages 2 and 3a — this pro
 
 ## 🔒 Privacy & confidentiality
 
-Newcase LM is built for environments where confidentiality is non-negotiable — whether that's attorney-client privilege, professional secrecy obligations, or internal compliance policies. All processing (text extraction, LLM inference, anonymization) happens locally via [Ollama](https://ollama.com). No API calls to external services. No telemetry. No cloud. Your case data stays on your hardware.
+Newcase LM is built for environments where confidentiality is non-negotiable — whether that's attorney-client privilege, professional secrecy obligations, or internal compliance policies. By default, all processing (text extraction, LLM inference, anonymization) happens locally via [Ollama](https://ollama.com). No API calls to external services. No telemetry. No cloud. Your case data stays on your hardware.
+
+Optionally, the briefing stages can run against an OpenAI-compatible API (`NEWCASE_BACKEND=openai_compat`) — use this only with a provider you are allowed to send case data to (e.g. under a zero-data-retention agreement), or with a local OpenAI-compatible server. The identifier candidate search for deterministic anonymization is configured separately (`NEWCASE_ANON_BACKEND`) and stays local by default, regardless of the briefing backend.
 
 ## 📦 Installation
 
@@ -100,6 +102,9 @@ python3 pipeline.py --file ~/Desktop/newcase/contract.pdf
 # Skip anonymization (briefing only)
 python3 pipeline.py --skip-anon
 
+# Choose the anonymization mode for this run (default: llm, see below)
+python3 pipeline.py --anon-mode deterministic
+
 # Custom input/output directories
 python3 pipeline.py --input-dir ~/Cases/Smith --output-dir ~/Cases/Smith/output
 ```
@@ -115,6 +120,55 @@ The `output/` folder will contain:
 | `ANON_*.docx` | Anonymized version — safe for cloud AI prompts |
 | `ANON_*.md` | Same as Markdown |
 | `*_klartext.md` | Individual document summaries |
+
+The placeholder↔name mapping is **never** written into the `ANON_*` files.
+It lives in the case's mapping JSON (see below) and is additionally appended
+to the `KLARTEXT_*` files — the ones that stay in-house.
+
+## 🕵️ Anonymization modes & round-trip
+
+Stage 3b supports three modes via `NEWCASE_ANON_MODE` (or `--anon-mode` per run):
+
+| Mode | What happens |
+|------|--------------|
+| `llm` *(default)* | The LLM rewrites the briefing with placeholders and returns a mapping table (previous behavior). Can rephrase naturally ("the defendant's managing director"). |
+| `deterministic` | A local model only *proposes* the identifiers; the actual replacement is plain-Python string substitution (`pseudonymizer.py`). Amounts, dates and deadlines never pass through a generative model; placeholders are uniform (`[PERSON_1]`, `[FIRMA_2]`) and stable across the whole case. |
+| `both` | LLM rewrite first, then the deterministic pass catches anything the model missed. |
+
+**Guarantees in every mode:**
+
+- The mapping is stored as JSON per case in `NEWCASE_PSEUDONYM_DIR`
+  (default `~/Desktop/newcase/pseudonym_maps/`), separate from the output.
+- After each run the result is checked against the known mapping values.
+  If a real name is still present, the run exits non-zero, the `ANON_*.md`
+  gets a prominent *NOT RELEASED* banner and **no** anonymized DOCX is written.
+- In `llm` mode a missing mapping table (the model forgot the marker) is now
+  a hard error instead of a silently complete-looking file.
+
+**Round-trip:** drafts written on the anonymized text (e.g. by a cloud LLM)
+can be translated back to real names locally:
+
+```bash
+python3 depseudo.py --case smith --file draft.md          # → draft_depseudo.md
+python3 depseudo.py --list                                # existing mappings
+```
+
+**Candidate search stays local.** In `deterministic`/`both` mode the model
+that reads the *cleartext* to propose identifiers is configured separately
+from the briefing backend and defaults to local Ollama — even if your
+briefings run against a cloud API:
+
+```bash
+export NEWCASE_ANON_BACKEND=ollama            # default
+export NEWCASE_ANON_MODEL=gemma4:31b-it-q8_0  # model for candidate search
+# or an OpenAI-compatible LOCAL server (oMLX, LM Studio, vLLM):
+export NEWCASE_ANON_BACKEND=openai_compat
+export NEWCASE_ANON_BASE_URL=http://localhost:8080/v1
+export NEWCASE_ANON_MODEL=<model-id>
+```
+
+A warning is logged if the candidate-search endpoint does not look like
+localhost/LAN.
 
 ## 🔄 Incremental updates
 
@@ -231,6 +285,14 @@ export NEWCASE_BACKEND=ollama
 ```
 
 The same `NEWCASE_OLLAMA_TIMEOUT` applies — cloud calls can be slow when contexts get large.
+
+**Check the configuration before a long run:**
+
+```bash
+python check_cloud.py
+```
+
+This validates the API key against `GET /models`, verifies that `NEWCASE_MODEL` is actually offered by that endpoint, and sends one minimal chat request. On failure it prints the provider's full error body — a typo in the model name otherwise surfaces only as a bare `400 Bad Request` mid-pipeline. The same model preflight runs automatically at pipeline start, so an invalid model aborts before the first document is sent.
 
 **Confidentiality considerations for legal use.** Sending case material through a cloud API means the data is processed in a third-party datacenter. Most providers contractually exclude API data from training (Mistral, OpenAI, Anthropic all do as of 2026), so the main remaining concerns are jurisdiction, persistence and client-confidentiality rules.
 
