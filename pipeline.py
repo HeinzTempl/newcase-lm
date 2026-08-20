@@ -30,6 +30,8 @@ from pathlib import Path
 from datetime import datetime
 
 import case_layer
+import config as cfg
+import pseudonymizer
 from config import (
     SUPPORTED_EXTENSIONS, ENABLE_REDACTION_CHECK,
     ENABLE_VERIFICATION,
@@ -37,7 +39,7 @@ from config import (
 from extractor import extract_file, save_extracted_text
 from summarizer import (
     check_ollama_available, summarize_document,
-    summarize_act, anonymize_text,
+    summarize_act, anonymize_text, extract_pii_terms,
 )
 from docx_export import export_klartext_docx, export_anon_docx
 
@@ -161,6 +163,9 @@ def run_pipeline(
     output_dir = case.output_dir
     extracted_dir = case.extracted_dir
     cache_dir = case.cache_dir
+
+    # Probleme, die am Ende als Fehler gemeldet werden (Exit-Code != 0)
+    problems: list[str] = []
 
     logger.info("=" * 60)
     logger.info("KANZLEI-PIPELINE v2 (Klartext-First)")
@@ -368,28 +373,35 @@ def run_pipeline(
             logger.info("STUFE 3b: Anonymisierung für Cloud-Prompt")
             logger.info("-" * 40)
 
-            # Anonymisiere die Gesamtübersicht
-            anon_raw = anonymize_text(act_summary_klartext)
-
-            # Zuordnungstabelle extrahieren
-            anon_summary, mapping_table = _split_mapping_table(anon_raw)
+            # Anonymisieren (Modus: NEWCASE_ANON_MODE)
+            anon_summary, mapping_table, anon_problems = _run_anonymization(
+                act_summary_klartext, case.name
+            )
+            problems.extend(anon_problems)
 
             # Dokumentenübersicht (identisch zur Klartext-Version, enthält keine PII)
             anon_doc_overview = doc_overview
 
-            anon_path = output_dir / f"ANON_{timestamp}.md"
-            anon_path.write_text(
-                f"# Gesamtübersicht Akt (ANONYMISIERT)\n\n"
-                f"*Erstellt: {timestamp_display}*\n"
-                f"*Anonymisiert für Cloud-LLM-Nutzung*\n\n"
-                f"---\n\n{anon_doc_overview}\n\n---\n\n{anon_summary}",
-                encoding="utf-8",
-            )
-            logger.info(f"  → {anon_path.name}")
+            if anon_summary is not None:
+                banner = ""
+                if anon_problems:
+                    banner = ("> ⚠ **NICHT FREIGEGEBEN — NICHT NACH AUSSEN GEBEN**\n"
+                              + "".join(f"> - {p}\n" for p in anon_problems) + "\n")
+                anon_path = output_dir / f"ANON_{timestamp}.md"
+                anon_path.write_text(
+                    f"# Gesamtübersicht Akt (ANONYMISIERT)\n\n"
+                    f"*Erstellt: {timestamp_display}*\n"
+                    f"*Anonymisiert für Cloud-LLM-Nutzung*\n\n"
+                    f"{banner}"
+                    f"---\n\n{anon_doc_overview}\n\n---\n\n{anon_summary}",
+                    encoding="utf-8",
+                )
+                logger.info(f"  → {anon_path.name}")
 
-            # Zuordnungstabelle an Klartext-Dokument anhängen
+            # Zuordnungstabelle NUR an das Klartext-Dokument anhängen —
+            # niemals an die ANON-Dateien, die nach außen gehen.
             if mapping_table:
-                logger.info(f"  → Zuordnungstabelle erkannt, wird an Klartext angehängt")
+                logger.info(f"  → Zuordnungstabelle wird an Klartext angehängt")
                 # MD-Datei ergänzen
                 with open(klartext_path, "a", encoding="utf-8") as f:
                     f.write(f"\n\n---\n\n## Zuordnung Klartext → Anonymisiert\n\n{mapping_table}")
@@ -402,14 +414,17 @@ def run_pipeline(
                     mapping_table=mapping_table,
                 )
 
-            # DOCX-Export Anonymisiert
-            anon_docx_path = output_dir / f"ANON_{timestamp}.docx"
-            export_anon_docx(
-                anon_summary=anon_summary,
-                doc_overview=anon_doc_overview,
-                output_path=anon_docx_path,
-                timestamp=timestamp_display,
-            )
+            # DOCX-Export Anonymisiert — nur wenn die Anonymisierung sauber war
+            if anon_summary is not None and not anon_problems:
+                anon_docx_path = output_dir / f"ANON_{timestamp}.docx"
+                export_anon_docx(
+                    anon_summary=anon_summary,
+                    doc_overview=anon_doc_overview,
+                    output_path=anon_docx_path,
+                    timestamp=timestamp_display,
+                )
+            elif anon_problems:
+                logger.error("  ANON-DOCX übersprungen — Anonymisierung nicht freigegeben (Details am Ende).")
         else:
             logger.info("\n--skip-anon: Anonymisierung übersprungen")
 
@@ -442,23 +457,30 @@ def run_pipeline(
             logger.info("STUFE 3b: Anonymisierung für Cloud-Prompt")
             logger.info("-" * 40)
 
-            anon_raw = anonymize_text(summaries[0]["summary"])
-
-            # Zuordnungstabelle extrahieren
-            anon_summary, mapping_table = _split_mapping_table(anon_raw)
-
-            anon_path = output_dir / f"{source_stem}_anon.md"
-            anon_path.write_text(
-                f"# Zusammenfassung (ANONYMISIERT): {source_stem}\n\n"
-                f"*Anonymisiert für Cloud-LLM-Nutzung*\n\n"
-                f"{anon_summary}",
-                encoding="utf-8",
+            anon_summary, mapping_table, anon_problems = _run_anonymization(
+                summaries[0]["summary"], case.name
             )
-            logger.info(f"  → {anon_path.name}")
+            problems.extend(anon_problems)
 
-            # Zuordnungstabelle an Klartext anhängen (MD + DOCX)
+            if anon_summary is not None:
+                banner = ""
+                if anon_problems:
+                    banner = ("> ⚠ **NICHT FREIGEGEBEN — NICHT NACH AUSSEN GEBEN**\n"
+                              + "".join(f"> - {p}\n" for p in anon_problems) + "\n")
+                anon_path = output_dir / f"{source_stem}_anon.md"
+                anon_path.write_text(
+                    f"# Zusammenfassung (ANONYMISIERT): {source_stem}\n\n"
+                    f"*Anonymisiert für Cloud-LLM-Nutzung*\n\n"
+                    f"{banner}"
+                    f"{anon_summary}",
+                    encoding="utf-8",
+                )
+                logger.info(f"  → {anon_path.name}")
+
+            # Zuordnungstabelle NUR an den Klartext (MD + DOCX) —
+            # niemals an die ANON-Dateien, die nach außen gehen.
             if mapping_table:
-                logger.info(f"  → Zuordnungstabelle erkannt, wird an Klartext angehängt")
+                logger.info(f"  → Zuordnungstabelle wird an Klartext angehängt")
                 klartext_md_path = output_dir / f"{source_stem}_klartext.md"
                 if klartext_md_path.exists():
                     with open(klartext_md_path, "a", encoding="utf-8") as f:
@@ -472,14 +494,17 @@ def run_pipeline(
                     mapping_table=mapping_table,
                 )
 
-            # DOCX-Export Anonymisiert
-            anon_docx_path = output_dir / f"{source_stem}_anon.docx"
-            export_anon_docx(
-                anon_summary=anon_summary,
-                doc_overview=doc_overview,
-                output_path=anon_docx_path,
-                timestamp=timestamp_display_single,
-            )
+            # DOCX-Export Anonymisiert — nur wenn die Anonymisierung sauber war
+            if anon_summary is not None and not anon_problems:
+                anon_docx_path = output_dir / f"{source_stem}_anon.docx"
+                export_anon_docx(
+                    anon_summary=anon_summary,
+                    doc_overview=doc_overview,
+                    output_path=anon_docx_path,
+                    timestamp=timestamp_display_single,
+                )
+            elif anon_problems:
+                logger.error("  ANON-DOCX übersprungen — Anonymisierung nicht freigegeben (Details am Ende).")
 
     # ========================================
     # Fertig
@@ -493,6 +518,15 @@ def run_pipeline(
     if not skip_anon:
         logger.info(f"  Anonymisierte Version:   {output_dir}")
     logger.info("=" * 60)
+
+    if problems:
+        logger.error("")
+        logger.error("!" * 60)
+        logger.error("ANONYMISIERUNG NICHT FREIGEGEBEN — bitte prüfen:")
+        for p in problems:
+            logger.error(f"  - {p}")
+        logger.error("!" * 60)
+        sys.exit(2)
 
 
 def _build_doc_overview(extracted_docs: list[dict], summaries: list[dict]) -> str:
@@ -561,6 +595,104 @@ def _split_mapping_table(anon_raw: str) -> tuple[str, str | None]:
     return anon_raw.strip(), None
 
 
+def _mapping_table_md(map_id: str) -> str | None:
+    """Zuordnungstabelle (Markdown) aus der JSON-Map — für das Klartext-Dokument."""
+    mapping, _alias = pseudonymizer.load_map(
+        pseudonymizer.map_path(map_id, cfg.PSEUDONYM_DIR)
+    )
+    if not mapping:
+        return None
+    lines = ["| Originalbezeichnung | Platzhalter |",
+             "|---------------------|-------------|"]
+    for ph, val in sorted(mapping.items()):
+        lines.append(f"| {val} | {ph} |")
+    return "\n".join(lines)
+
+
+def _run_anonymization(text: str, map_id: str) -> tuple[str | None, str | None, list[str]]:
+    """Stufe 3b in allen Modi (NEWCASE_ANON_MODE=llm|deterministic|both).
+
+    Returns:
+        (anon_text, zuordnungstabelle_fuer_klartext, probleme)
+        anon_text ist None, wenn gar kein verwertbares Ergebnis entstand.
+        Ein nicht-leeres 'probleme' heißt: Ergebnis NICHT nach außen geben.
+    """
+    mode = (cfg.ANON_MODE or "llm").lower()
+    problems: list[str] = []
+    if mode not in ("llm", "deterministic", "both"):
+        return None, None, [
+            f"Unbekannter NEWCASE_ANON_MODE '{mode}' — erlaubt: llm|deterministic|both."
+        ]
+    logger.info(f"  Anonymisierungs-Modus: {mode}")
+
+    anon_text = None
+    mapping_table = None
+
+    # --- LLM-Anonymisierung (Modus llm und both) ---
+    if mode in ("llm", "both"):
+        anon_raw = anonymize_text(text)
+        if anon_raw.startswith("[FEHLER"):
+            return None, None, [f"LLM-Anonymisierung fehlgeschlagen: {anon_raw}"]
+        anon_text, mapping_table = _split_mapping_table(anon_raw)
+        if mapping_table:
+            added, skipped = pseudonymizer.merge_llm_mapping_table(
+                mapping_table, map_id, cfg.PSEUDONYM_DIR
+            )
+            note = f"  Zuordnungstabelle: {added} Einträge in die JSON-Map übernommen"
+            if skipped:
+                note += (f", {skipped} ohne [ECKIGE]-Platzhalter übersprungen "
+                         f"(für diese gibt es keinen automatischen Rückweg)")
+            logger.info(note)
+        else:
+            problems.append(
+                "Das Modell hat KEINE Zuordnungstabelle geliefert "
+                "(Marker ---ZUORDNUNG--- fehlt) — ohne Tabelle gibt es keinen "
+                "Rückweg (depseudo.py). Lauf wiederholen oder "
+                "NEWCASE_ANON_MODE=deterministic verwenden."
+            )
+
+    # --- Deterministische Ersetzung (Modus deterministic und both) ---
+    if mode in ("deterministic", "both"):
+        src = anon_text if anon_text is not None else text
+        found = extract_pii_terms(src)
+        if found is None:
+            problems.append(
+                "Kandidatensuche für die deterministische Anonymisierung "
+                "fehlgeschlagen (siehe Log) — keine Ersetzung durchgeführt."
+            )
+            if mode == "deterministic":
+                return None, None, problems
+        else:
+            result = pseudonymizer.pseudonymize_text(
+                src, map_id, cfg.PSEUDONYM_DIR, found=found
+            )
+            anon_text = result.text
+            logger.info(
+                f"  Deterministisch ersetzt: {sum(result.hits.values())} Stellen "
+                f"({result.new_entries} neue Einträge, gesamt {result.total_entries}) "
+                f"| Tabelle: {result.map_path}"
+            )
+
+    # --- Endkontrolle: steht ein bekannter Klarwert noch im Ergebnis? ---
+    if anon_text is not None:
+        residuals = pseudonymizer.verify_no_cleartext(
+            anon_text, map_id, cfg.PSEUDONYM_DIR
+        )
+        if residuals:
+            problems.append(
+                "Bekannte Klarwerte stehen noch im anonymisierten Text "
+                f"({', '.join(residuals)}) — NICHT nach außen geben, "
+                "Lauf wiederholen."
+            )
+
+    # Tabelle für das Klartext-Dokument: im deterministischen Modus aus der
+    # JSON-Map erzeugen (das LLM liefert dort keine).
+    if mapping_table is None:
+        mapping_table = _mapping_table_md(map_id)
+
+    return anon_text, mapping_table, problems
+
+
 def _extract_doc_type_from_summary(summary_text: str) -> str | None:
     """Extrahiert den Dokumenttyp aus der LLM-Zusammenfassung."""
     match = re.search(r"\*\*Dokumenttyp:\*\*\s*(.+?)(?:\n|$)", summary_text)
@@ -606,6 +738,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Nur Klartext-Output, keine Anonymisierung (Stufe 3b überspringen)",
     )
+    parser.add_argument(
+        "--anon-mode",
+        choices=["llm", "deterministic", "both"],
+        help="Anonymisierungs-Modus für diesen Lauf (überschreibt NEWCASE_ANON_MODE)",
+    )
     # Case-Layer-Argumente (--case, --new-case, --list-cases)
     case_layer.add_case_args(parser)
 
@@ -620,6 +757,10 @@ if __name__ == "__main__":
 
     # Pfade in config.py auf den Case patchen (für Module, die config.X lesen)
     case_layer.apply_case_to_config(selected_case)
+
+    # Anonymisierungs-Modus per CLI überschreiben
+    if args.anon_mode:
+        cfg.ANON_MODE = args.anon_mode
 
     run_pipeline(
         case=selected_case,

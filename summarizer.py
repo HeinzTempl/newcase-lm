@@ -39,7 +39,12 @@ from config import (
     ENABLE_VERIFICATION,
     ENABLE_TWO_STAGE,
     NUM_CTX,
+    ANON_BACKEND,
+    ANON_BASE_URL,
+    ANON_API_KEY,
+    ANON_MODEL,
 )
+import pseudonymizer
 
 
 # Dateiendungen, bei denen wir den E-Mail-Spezialprompt verwenden
@@ -89,10 +94,25 @@ def _check_ollama_available() -> bool:
         return False
 
 
-def _check_openai_compat_available() -> bool:
-    """Prüft, ob die Cloud-API-Konfiguration plausibel gesetzt ist.
+def _api_base() -> str:
+    """Normalisiert NEWCASE_API_BASE_URL auf die reine Base-URL.
 
-    Kein echter Healthcheck (kostet API-Tokens), nur Sanity-Check der Env-Vars.
+    Toleriert, wenn versehentlich der volle Endpoint gesetzt wurde
+    (z.B. https://api.mistral.ai/v1/chat/completions) — sonst würde daraus
+    .../chat/completions/chat/completions und die API antwortet mit 400/404.
+    """
+    base = (NEWCASE_API_BASE_URL or "").strip().rstrip("/")
+    for suffix in ("/chat/completions", "/chat/completion", "/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    return base
+
+
+def _check_openai_compat_available() -> bool:
+    """Prüft, ob die Cloud-API-Konfiguration nutzbar ist.
+
+    Sanity-Check der Env-Vars plus ein kostenloser GET /models — damit ein
+    falscher Modellname sofort auffällt und nicht erst als HTTP 400 mitten im Lauf.
     """
     if not NEWCASE_API_KEY:
         logger.error(
@@ -104,9 +124,40 @@ def _check_openai_compat_available() -> bool:
             "NEWCASE_API_BASE_URL ist nicht gesetzt — z.B. https://api.mistral.ai/v1"
         )
         return False
-    logger.info(
-        f"Cloud-Backend OK — {NEWCASE_API_BASE_URL} mit Modell '{OLLAMA_MODEL}'"
-    )
+
+    base = _api_base()
+
+    # Modell-Preflight (kostet keine Tokens). Ein fehlschlagender Aufruf ist
+    # kein K.O. — nicht jedes Backend bietet /models an.
+    try:
+        resp = requests.get(
+            f"{base}/models",
+            headers={"Authorization": f"Bearer {NEWCASE_API_KEY}"},
+            timeout=15,
+        )
+        if resp.status_code in (401, 403):
+            logger.error(
+                f"Cloud-API lehnt den API-Key ab ({resp.status_code}) — "
+                f"NEWCASE_API_KEY prüfen ({base})."
+            )
+            return False
+        if resp.ok:
+            ids = [m.get("id") for m in resp.json().get("data", []) if m.get("id")]
+            if ids and OLLAMA_MODEL not in ids:
+                stem = OLLAMA_MODEL.split(":")[0][:4].lower()
+                hint = [m for m in ids if stem in m.lower()] or sorted(ids)
+                logger.error(
+                    f"Modell '{OLLAMA_MODEL}' kennt {base} nicht — genau das gibt "
+                    f"beim Lauf einen HTTP 400. NEWCASE_MODEL auf einen gültigen "
+                    f"Wert setzen, z.B.: {', '.join(hint[:5])}"
+                )
+                return False
+    except requests.RequestException as e:
+        logger.warning(
+            f"Modell-Preflight übersprungen ({base}/models nicht abrufbar: {e})"
+        )
+
+    logger.info(f"Cloud-Backend OK — {base} mit Modell '{OLLAMA_MODEL}'")
     return True
 
 
@@ -331,6 +382,94 @@ def anonymize_text(klartext: str) -> str:
     return response
 
 
+def _is_local_endpoint(url: str) -> bool:
+    """Grobe Prüfung, ob ein Endpunkt im eigenen Netz liegt (localhost/LAN)."""
+    m = re.match(r"^https?://([^/:]+)", url or "")
+    if not m:
+        return False
+    host = m.group(1).lower()
+    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        return True
+    return bool(re.match(r"^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)", host))
+
+
+def extract_pii_terms(text: str) -> list[tuple[str, str]] | None:
+    """Lässt ein Modell die Identifikatoren im Klartext VORSCHLAGEN
+    (Namen, Firmen, Anschriften, GZ, IBAN, ...). Ersetzt wird später
+    deterministisch in pseudonymizer.apply() — dieser Lauf liefert nur
+    Kandidaten.
+
+    Läuft bewusst über das ANON-Backend (Default: lokales Ollama) und NICHT
+    über das Briefing-Backend: der Klartext darf diese Maschine bzw. das
+    eigene Netz nicht verlassen, egal wohin NEWCASE_BACKEND zeigt.
+
+    Returns:
+        Liste (wert, kategorie) oder None, wenn das Modell kein
+        verwertbares JSON geliefert hat.
+    """
+    if ANON_BACKEND == "openai_compat":
+        base = (ANON_BASE_URL or "").strip().rstrip("/")
+        if not base:
+            logger.error(
+                "NEWCASE_ANON_BACKEND=openai_compat, aber NEWCASE_ANON_BASE_URL "
+                "fehlt — Kandidatensuche nicht möglich."
+            )
+            return None
+        if not _is_local_endpoint(base):
+            logger.warning(
+                f"ACHTUNG: Der Anonymisierungs-Endpunkt {base} sieht nicht nach "
+                f"localhost/LAN aus. Die Kandidatensuche schickt KLARTEXT dorthin — "
+                f"für Mandantendaten nur lokale Endpunkte verwenden."
+            )
+        payload = {
+            "model": ANON_MODEL,
+            "messages": [
+                {"role": "system", "content": pseudonymizer.EXTRACT_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.0,
+        }
+        headers = {"Authorization": f"Bearer {ANON_API_KEY}",
+                   "Content-Type": "application/json"}
+        try:
+            resp = requests.post(f"{base}/chat/completions", json=payload,
+                                 headers=headers, timeout=OLLAMA_TIMEOUT)
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"]
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Kandidatensuche fehlgeschlagen ({base}): {e}")
+            return None
+    else:
+        base = (ANON_BASE_URL or OLLAMA_BASE_URL).rstrip("/")
+        payload = {
+            "model": ANON_MODEL,
+            "messages": [
+                {"role": "system", "content": pseudonymizer.EXTRACT_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.0, "num_ctx": NUM_CTX},
+        }
+        try:
+            resp = requests.post(f"{base}/api/chat", json=payload,
+                                 timeout=OLLAMA_TIMEOUT)
+            resp.raise_for_status()
+            raw = resp.json()["message"]["content"]
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Kandidatensuche fehlgeschlagen ({base}, {ANON_MODEL}): {e}")
+            return None
+
+    if "<think>" in raw:
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    found = pseudonymizer.parse_extraction_json(raw)
+    if found is None:
+        logger.error(
+            "Das Modell hat für die Kandidatensuche kein verwertbares JSON "
+            "geliefert — deterministische Anonymisierung nicht möglich."
+        )
+    return found
+
+
 def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
     """Ruft Ollama API auf und gibt die Antwort zurück.
 
@@ -404,6 +543,43 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
         return f"[FEHLER: {e}]"
 
 
+def _extract_api_error(resp) -> str:
+    """Holt die Klartext-Fehlermeldung aus einer Error-Response.
+
+    Die Anbieter antworten leider unterschiedlich:
+      OpenAI / LM Studio : {"error": {"message": "..."}}
+      Mistral            : {"object": "error", "message": "...", "type": "..."}
+      Mistral (Pydantic) : {"detail": [{"loc": [...], "msg": "..."}]}
+      Anthropic          : {"type": "error", "error": {"message": "..."}}
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        return (resp.text or "").strip()[:500] or "kein Response-Body"
+
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])
+        if isinstance(err, str) and err:
+            return err
+        if body.get("message"):
+            return str(body["message"])
+        detail = body.get("detail")
+        if isinstance(detail, list):
+            msgs = [
+                f"{'.'.join(str(p) for p in d.get('loc', []))}: {d.get('msg', '')}".strip(": ")
+                for d in detail
+                if isinstance(d, dict)
+            ]
+            if msgs:
+                return "; ".join(msgs)
+        if isinstance(detail, str) and detail:
+            return detail
+
+    return json.dumps(body, ensure_ascii=False)[:500]
+
+
 def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -> str:
     """Ruft eine OpenAI-kompatible Cloud-API auf (Mistral, OpenAI, Anthropic, …).
 
@@ -432,10 +608,12 @@ def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -
         "Content-Type": "application/json",
     }
 
+    endpoint = f"{_api_base()}/chat/completions"
+
     try:
         t_start = time.time()
         resp = requests.post(
-            f"{NEWCASE_API_BASE_URL.rstrip('/')}/chat/completions",
+            endpoint,
             json=payload,
             headers=headers,
             timeout=OLLAMA_TIMEOUT,
@@ -457,7 +635,7 @@ def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -
         logger.info(
             f"  {prefix}☁️  {prompt_tokens:,} prompt + {output_tokens:,} output "
             f"= {total_tokens:,} tokens "
-            f"| {tok_per_sec:.1f} tok/s | {t_elapsed:.0f}s | via {NEWCASE_API_BASE_URL}"
+            f"| {tok_per_sec:.1f} tok/s | {t_elapsed:.0f}s | via {_api_base()}"
         )
 
         # Thinking-Blöcke entfernen (manche Modelle geben sowas aus)
@@ -474,15 +652,16 @@ def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -
         logger.error(f"Cloud-API nicht erreichbar: {e}")
         return "[FEHLER: Cloud-API nicht erreichbar]"
 
-    except requests.HTTPError as e:
-        # Detaillierte Fehler aus dem Response-Body extrahieren wenn möglich
-        try:
-            err_body = resp.json().get("error", {})
-            err_msg = err_body.get("message", str(e)) if isinstance(err_body, dict) else str(err_body)
-        except Exception:
-            err_msg = str(e)
-        logger.error(f"Cloud-API HTTP-Fehler: {err_msg}")
-        return f"[FEHLER: Cloud-API: {err_msg}]"
+    except requests.HTTPError:
+        err_msg = _extract_api_error(resp)
+        logger.error(
+            f"Cloud-API HTTP-Fehler {resp.status_code} — {err_msg}\n"
+            f"    Endpoint : {endpoint}\n"
+            f"    Modell   : {OLLAMA_MODEL}\n"
+            f"    Request  : {len(system_prompt):,} + {len(user_prompt):,} Zeichen "
+            f"(~{(len(system_prompt) + len(user_prompt)) // 4:,} Tokens)"
+        )
+        return f"[FEHLER: Cloud-API {resp.status_code}: {err_msg}]"
 
     except Exception as e:
         logger.error(f"Cloud-API Fehler: {e}")

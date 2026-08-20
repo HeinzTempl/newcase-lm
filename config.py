@@ -83,6 +83,54 @@ OLLAMA_MODEL = os.environ.get(
 NEWCASE_API_BASE_URL = os.environ.get("NEWCASE_API_BASE_URL", "")
 NEWCASE_API_KEY = os.environ.get("NEWCASE_API_KEY", "")
 
+# === Anonymisierung (Stufe 3b) ===
+# Modus der Anonymisierung:
+#   llm            (Default) Das bisherige Verhalten: ein LLM schreibt den Text
+#                  anonymisiert neu und liefert eine Zuordnungstabelle mit.
+#   deterministic  Ein lokales Modell schlägt nur die Identifikatoren VOR,
+#                  ersetzt wird deterministisch in Python (pseudonymizer.py).
+#                  Beträge, Daten und Fristen laufen durch KEIN generatives
+#                  Modell; Platzhalter sind einheitlich ([PERSON_1], [FIRMA_2])
+#                  und über die ganze Akte stabil; der Rückweg (depseudo.py)
+#                  funktioniert garantiert.
+#   both           Erst LLM-Anonymisierung (kann umformulieren, z. B. "der
+#                  Geschäftsführer der Beklagten"), danach läuft die
+#                  deterministische Ersetzung über das Ergebnis und fängt,
+#                  was das Modell übersehen hat.
+#   export NEWCASE_ANON_MODE=deterministic
+ANON_MODE = os.environ.get("NEWCASE_ANON_MODE", "llm").lower()
+
+# Verzeichnis der Zuordnungstabellen (JSON, eine je Fall). Bewusst GETRENNT
+# vom Output-Ordner des Falls: die Datei, die nach außen geht, darf die
+# Klarnamen-Zuordnung niemals selbst tragen.
+#   export NEWCASE_PSEUDONYM_DIR=~/pfad/zu/pseudonym_maps
+# (PSEUDO_DIR wird als Fallback gelesen, falls dieselben Tabellen auch von
+# anderen Werkzeugen verwendet werden.)
+PSEUDONYM_DIR = Path(os.path.expanduser(
+    os.environ.get("NEWCASE_PSEUDONYM_DIR")
+    or os.environ.get("PSEUDO_DIR")
+    or str(Path.home() / "Desktop" / "newcase" / "pseudonym_maps")
+))
+
+# Backend für die Identifikator-Suche (Kandidaten-Extraktion) im Modus
+# deterministic/both. Dieser Lauf sieht den KLARTEXT und ist deshalb
+# bewusst vom Briefing-Backend (NEWCASE_BACKEND) entkoppelt: auch wenn die
+# Briefings über eine Cloud-API laufen, bleibt die Kandidatensuche lokal.
+#   ollama         (Default) lokaler Ollama-Endpunkt
+#   openai_compat  OpenAI-kompatibler Endpunkt — gedacht für LOKALE Server
+#                  wie oMLX, LM Studio oder vLLM, nicht für die Cloud.
+#   export NEWCASE_ANON_BACKEND=openai_compat
+#   export NEWCASE_ANON_BASE_URL=http://localhost:8080/v1
+#   export NEWCASE_ANON_MODEL=DeepSeek-V4-Flash-0731-MXFP4-MLX
+ANON_BACKEND = os.environ.get("NEWCASE_ANON_BACKEND", "ollama").lower()
+ANON_BASE_URL = os.environ.get("NEWCASE_ANON_BASE_URL", "")
+ANON_API_KEY = os.environ.get("NEWCASE_ANON_API_KEY", "local")
+_ANON_MODEL_DEFAULT = (
+    OLLAMA_MODEL if (ANON_BACKEND == "ollama" and NEWCASE_BACKEND == "ollama")
+    else "gemma4:31b-it-q8_0"
+)
+ANON_MODEL = os.environ.get("NEWCASE_ANON_MODEL", "") or _ANON_MODEL_DEFAULT
+
 # === Kontextfenster ===
 # Default 32k passt für 64GB-Maschinen mit Gemma4-31B Q8.
 # Auf größeren Maschinen via Env-Variable hochsetzen, z.B.:
