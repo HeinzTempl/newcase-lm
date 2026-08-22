@@ -269,6 +269,17 @@ def list_maps(maps_dir: str | Path) -> list[dict]:
 
 # === Kern: deterministische Ersetzung ===
 
+def _ci_get(d: dict, key: str):
+    """Case-insensitiver Lookup ('FRIEDA' findet die Kurzform 'Frieda')."""
+    if key in d:
+        return d[key]
+    kl = key.lower()
+    for k, v in d.items():
+        if k.lower() == kl:
+            return v
+    return None
+
+
 def _find_residuals(text: str, mapping: dict, alias: dict) -> list:
     """Bekannte Klarwerte UND deren Kurzformen, die noch im Text stehen.
 
@@ -322,16 +333,18 @@ def apply(src: str, mapping: dict, alias: dict,
             # 'Andrea Hofstetter' bleibt dagegen eine eigene Person, auch wenn
             # es schon einen 'Ing. Franz Hofstetter' gibt.
             stripped = _TITLES_RX.sub("", val).strip()
-            if stripped != val and " " not in stripped and stripped in alias:
-                merged_ph = alias[stripped]
+            if stripped != val and " " not in stripped:
+                merged_ph = _ci_get(alias, stripped)
         elif use_aliases and cat == "firma":
             # nur wenn ALLE brauchbaren Namensbestandteile auf denselben
             # Platzhalter zeigen ('Rustler' -> volle Hausverwaltung; eine
             # 'Rustler Immobilien GmbH' bekäme weiter ihren eigenen).
+            # Case-insensitiv, damit 'FRIEDA RUSTLER ... KG' (Großschreibung
+            # im Rechnungskopf) nicht als zweite Firma geführt wird.
             toks = _aliases(val, "firma")
-            if toks and all(t in alias for t in toks) \
-                    and len({alias[t] for t in toks}) == 1:
-                merged_ph = alias[toks[0]]
+            phs = {_ci_get(alias, t) for t in toks} if toks else set()
+            if toks and None not in phs and len(phs) == 1:
+                merged_ph = phs.pop()
         elif cat not in ("person", "firma"):
             # Teilstück eines bereits erfassten Werts ('Siebeneichengasse 1-3,
             # Top 4' steckt in '1150 Wien, Siebeneichengasse 1-3, Top 4';

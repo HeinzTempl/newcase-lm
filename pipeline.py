@@ -256,7 +256,7 @@ def run_pipeline(
     logger.info("-" * 40)
 
     if not check_ollama_available():
-        logger.error("Ollama nicht verfügbar - Zusammenfassung übersprungen")
+        logger.error("Konfiguriertes LLM-Backend nicht nutzbar (siehe Meldung oben) — Zusammenfassung übersprungen")
         logger.info(f"Extrahierte Texte liegen in: {extracted_dir}")
         sys.exit(1)
 
@@ -328,6 +328,17 @@ def run_pipeline(
         logger.info(f"\nCache: {cache_hits} von {len(extracted_docs)} aus Cache geladen")
     logger.info(f"Klartext-Zusammenfassungen abgeschlossen: {len(summaries)} Dokumente")
 
+    # Harter Abbruch, wenn Zusammenfassungen fehlgeschlagen sind — sonst
+    # laufen Fehlermeldungen als "Sachverhalt" durch alle weiteren Stufen.
+    failed = [s["source_file"] for s in summaries
+              if s["summary"].lstrip().startswith("[FEHLER")]
+    if failed:
+        logger.error("")
+        logger.error(f"{len(failed)} von {len(summaries)} Zusammenfassungen "
+                     f"fehlgeschlagen: {', '.join(failed)}")
+        logger.error("Pipeline abgebrochen — Backend-Fehler beheben und neu starten.")
+        sys.exit(1)
+
     # ========================================
     # STUFE 3a: Gesamtübersicht KLARTEXT (Inhouse)
     # ========================================
@@ -338,6 +349,10 @@ def run_pipeline(
         logger.info("-" * 40)
 
         act_summary_klartext = summarize_act(summaries)
+        if act_summary_klartext.lstrip().startswith("[FEHLER"):
+            logger.error(f"Gesamtübersicht fehlgeschlagen: {act_summary_klartext[:200]}")
+            logger.error("Pipeline abgebrochen — Backend-Fehler beheben und neu starten.")
+            sys.exit(1)
 
         # Dokumentenübersicht erstellen (mit echten Dokumenttypen aus LLM)
         doc_overview = _build_doc_overview(extracted_docs, summaries)

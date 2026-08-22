@@ -131,6 +131,16 @@ _ANON_MODEL_DEFAULT = (
 )
 ANON_MODEL = os.environ.get("NEWCASE_ANON_MODEL", "") or _ANON_MODEL_DEFAULT
 
+# === Denkspur (Thinking) ===
+# 'off' unterdrückt bei Thinking-Modellen (Qwen, DeepSeek, Gemma) die
+# Denkspur — bei den mechanischen Pipeline-Aufgaben (Zusammenfassen,
+# Extrahieren) meist gleiche Qualität bei einem Bruchteil der Zeit.
+# Ollama: {"think": false}; OpenAI-kompatibel (oMLX, vLLM):
+# chat_template_kwargs={"enable_thinking": false}. Backends, die den
+# Parameter nicht kennen, bekommen den Request automatisch nochmal ohne.
+#   export NEWCASE_THINK=off
+THINK = os.environ.get("NEWCASE_THINK", "auto").lower()
+
 # === Kontextfenster ===
 # Default 32k passt für 64GB-Maschinen mit Gemma4-31B Q8.
 # Auf größeren Maschinen via Env-Variable hochsetzen, z.B.:
