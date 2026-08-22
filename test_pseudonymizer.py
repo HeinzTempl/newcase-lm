@@ -222,3 +222,16 @@ def test_flex_findet_wert_mit_zeilenumbruch():
     res = ps.apply("Musterhofer\nStraße 218 in Wien.", mapping, alias,
                    [("Musterhofer Straße 218", "adresse")])
     assert "[ADRESSE_1]" in res.text
+
+
+def test_grossschreibung_variante_wird_gemerged():
+    """'BERTA KOGLER ... KG' im Rechnungskopf ist dieselbe Firma."""
+    mapping, alias = {}, {}
+    res = ps.apply(
+        "Berta Kogler Gebäudeverwaltung GmbH & Co KG schreibt. "
+        "Im Kopf: BERTA KOGLER GEBÄUDEVERWALTUNG GmbH & Co KG.",
+        mapping, alias,
+        [("Berta Kogler Gebäudeverwaltung GmbH & Co KG", "firma"),
+         ("BERTA KOGLER GEBÄUDEVERWALTUNG GmbH & Co KG", "firma")])
+    assert res.total_entries == 1
+    assert "KOGLER" not in res.text and "Kogler" not in res.text

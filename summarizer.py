@@ -43,8 +43,22 @@ from config import (
     ANON_BASE_URL,
     ANON_API_KEY,
     ANON_MODEL,
+    THINK,
 )
 import pseudonymizer
+
+
+def _post_with_think_fallback(url: str, payload: dict, think_key: str,
+                              headers: dict = None, timeout: int = None):
+    """POST; wenn das Backend den Thinking-Parameter ablehnt (HTTP >= 400),
+    einmal automatisch ohne diesen Parameter wiederholen."""
+    resp = requests.post(url, json=payload, headers=headers,
+                         timeout=timeout or OLLAMA_TIMEOUT)
+    if resp.status_code >= 400 and think_key in payload:
+        payload = {k: v for k, v in payload.items() if k != think_key}
+        resp = requests.post(url, json=payload, headers=headers,
+                             timeout=timeout or OLLAMA_TIMEOUT)
+    return resp
 
 
 # Dateiendungen, bei denen wir den E-Mail-Spezialprompt verwenden
@@ -94,6 +108,21 @@ def _check_ollama_available() -> bool:
         return False
 
 
+def _openai_compat_headers() -> dict:
+    """Auth-Header für OpenAI-kompatible Backends.
+
+    Bearer reicht für Mistral, OpenAI, oMLX, LM Studio, vLLM. Anthropic
+    verlangt auf manchen Endpunkten (v. a. GET /models) stattdessen
+    x-api-key + anthropic-version — beide Varianten mitzusenden ist
+    unschädlich und macht den Preflight überall lauffähig."""
+    return {
+        "Authorization": f"Bearer {NEWCASE_API_KEY}",
+        "x-api-key": NEWCASE_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+
+
 def _api_base() -> str:
     """Normalisiert NEWCASE_API_BASE_URL auf die reine Base-URL.
 
@@ -132,7 +161,7 @@ def _check_openai_compat_available() -> bool:
     try:
         resp = requests.get(
             f"{base}/models",
-            headers={"Authorization": f"Bearer {NEWCASE_API_KEY}"},
+            headers=_openai_compat_headers(),
             timeout=15,
         )
         if resp.status_code in (401, 403):
@@ -428,12 +457,19 @@ def extract_pii_terms(text: str) -> list[tuple[str, str]] | None:
                 {"role": "user", "content": text},
             ],
             "temperature": 0.0,
+            # Kandidatensuche ist mechanisch — Denkspur immer aus
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         headers = {"Authorization": f"Bearer {ANON_API_KEY}",
                    "Content-Type": "application/json"}
         try:
-            resp = requests.post(f"{base}/chat/completions", json=payload,
-                                 headers=headers, timeout=OLLAMA_TIMEOUT)
+            resp = _post_with_think_fallback(
+                f"{base}/chat/completions", payload, "chat_template_kwargs",
+                headers=headers)
+            if resp.status_code == 400 and "temperature" in (resp.text or "").lower():
+                payload.pop("temperature", None)
+                resp = requests.post(f"{base}/chat/completions", json=payload,
+                                     headers=headers, timeout=OLLAMA_TIMEOUT)
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"]
         except Exception as e:  # noqa: BLE001
@@ -449,10 +485,11 @@ def extract_pii_terms(text: str) -> list[tuple[str, str]] | None:
             ],
             "stream": False,
             "options": {"temperature": 0.0, "num_ctx": NUM_CTX},
+            # Kandidatensuche ist mechanisch — Denkspur immer aus
+            "think": False,
         }
         try:
-            resp = requests.post(f"{base}/api/chat", json=payload,
-                                 timeout=OLLAMA_TIMEOUT)
+            resp = _post_with_think_fallback(f"{base}/api/chat", payload, "think")
             resp.raise_for_status()
             raw = resp.json()["message"]["content"]
         except Exception as e:  # noqa: BLE001
@@ -490,13 +527,13 @@ def _call_ollama(system_prompt: str, user_prompt: str, label: str = "") -> str:
             "num_ctx": NUM_CTX,
         },
     }
+    if THINK == "off":
+        payload["think"] = False
 
     try:
         t_start = time.time()
-        resp = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=OLLAMA_TIMEOUT,
+        resp = _post_with_think_fallback(
+            f"{OLLAMA_BASE_URL}/api/chat", payload, "think",
         )
         resp.raise_for_status()
         data = resp.json()
@@ -602,22 +639,25 @@ def _call_openai_compat(system_prompt: str, user_prompt: str, label: str = "") -
         "temperature": 0.7,
         "top_p": 0.95,
     }
+    if THINK == "off":
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
-    headers = {
-        "Authorization": f"Bearer {NEWCASE_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = _openai_compat_headers()
 
     endpoint = f"{_api_base()}/chat/completions"
 
     try:
         t_start = time.time()
-        resp = requests.post(
-            endpoint,
-            json=payload,
-            headers=headers,
-            timeout=OLLAMA_TIMEOUT,
+        resp = _post_with_think_fallback(
+            endpoint, payload, "chat_template_kwargs", headers=headers,
         )
+        # Claude-5-Modelle lehnen temperature/top_p ab ("deprecated for this
+        # model") — dann ohne Sampling-Parameter wiederholen.
+        if resp.status_code == 400 and "temperature" in (resp.text or "").lower():
+            payload.pop("temperature", None)
+            payload.pop("top_p", None)
+            resp = requests.post(endpoint, json=payload, headers=headers,
+                                 timeout=OLLAMA_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         t_elapsed = time.time() - t_start
